@@ -1,4 +1,4 @@
-# Aurum ERP - Manufacturing, Retail & Business Management
+# Furniture ERP - Manufacturing, Retail & Business Management
 
 One system for the factory, five showrooms and head office: stock, recipes and production, product costing, POS, customers and loyalty, HR and payroll, finance, purchasing, delivery, marketing and reports.
 
