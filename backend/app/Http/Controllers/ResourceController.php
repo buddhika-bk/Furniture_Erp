@@ -26,7 +26,7 @@ class ResourceController extends Controller
     {
         $q = $c['model']::query();
         if (!empty($c['with'])) $q->with($c['with']);
-        if (!empty($c['branch']) && ($scope = auth_user()->branchScope())) $q->where($c['branch'], $scope);
+        \App\Support\ResourceScope::apply($q, $c);
 
         if ($s = trim((string) $r->query('search', ''))) {
             $cols = $c['search'] ?? [];
@@ -41,11 +41,28 @@ class ResourceController extends Controller
         return $q;
     }
 
+    private function validateOwnership(string $resource, array $data): void
+    {
+        foreach (['employee_id'=>'employees','warehouse_id'=>'warehouses','account_id'=>'accounts','invoice_id'=>'invoices'] as $field=>$related) {
+            if (!empty($data[$field])) $this->scoped($related, (int) $data[$field]);
+        }
+        if ($resource === 'leaves' && isset($data['status']) && $data['status'] !== 'pending') {
+            abort_unless(auth_user()->hasPermission('hr.approve'), 403, 'Leave decisions require approval permission.');
+        }
+    }
+
     public function index(Request $r, string $resource): JsonResponse
     {
         $c = $this->cfg($resource); $this->can($c, 'view');
         $per = min(max((int) $r->query('per_page', 20), 1), 200);
-        return response()->json($this->query($c, $r)->orderByDesc('id')->paginate($per));
+        $allowed = array_unique(array_merge(['id', 'created_at'], $c['search'] ?? [], $c['filters'] ?? []));
+        $sort = $r->query('sort', 'id');
+        abort_unless(in_array($sort, $allowed, true), 422, 'Unsupported sort field.');
+        $direction = $r->query('direction', 'desc');
+        abort_unless(in_array($direction, ['asc', 'desc'], true), 422, 'Unsupported sort direction.');
+        $q = $this->query($c, $r)->orderBy($sort, $direction);
+        if ($sort !== 'id') $q->orderBy('id');
+        return response()->json($q->paginate($per));
     }
 
     public function show(Request $r, string $resource, int $id): JsonResponse
@@ -59,6 +76,7 @@ class ResourceController extends Controller
         $c = $this->cfg($resource); $this->can($c, 'create');
         abort_if($c['readonly'] ?? false, 405, 'Use the workflow action for this record.');
         $data = $r->validate($c['rules']);
+        $this->validateOwnership($resource, $data);
         if (!empty($c['branch']) && ($scope = auth_user()->branchScope())) $data[$c['branch']] = $scope;
         return response()->json(['data' => $c['model']::create($data)], 201);
     }
@@ -82,6 +100,8 @@ class ResourceController extends Controller
             $rules[$field] = $parts;
         }
         $data = $r->validate($rules);
+        $this->validateOwnership($resource, $data);
+        if (!empty($c['branch']) && ($scope = auth_user()->branchScope())) $data[$c['branch']] = $scope;
         if ($resource === 'users' && empty($data['password'])) unset($data['password']);
         $m->update($data);
         return response()->json(['data' => $m->fresh($c['with'] ?? [])]);

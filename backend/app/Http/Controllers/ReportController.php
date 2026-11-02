@@ -10,7 +10,7 @@ class ReportController extends Controller
 
     private function filters(Request $r): array
     {
-        $f = $r->only(['from', 'to', 'branch_id', 'warehouse_id', 'type']);
+        $f = $r->validate(['from'=>'nullable|date_format:Y-m-d','to'=>'nullable|date_format:Y-m-d|after_or_equal:from','branch_id'=>'nullable|integer|exists:branches,id','warehouse_id'=>'nullable|integer|exists:warehouses,id','type'=>'nullable|in:raw_material,packaging,finished_good']);
         if ($s = auth_user()->branchScope()) $f['branch_id'] = $s;      // branch users only see their own branch
         return $f;
     }
@@ -20,6 +20,7 @@ class ReportController extends Controller
     public function show(Request $r, string $name)
     {
         $f = $this->filters($r);
+        abort_if(!empty($f['branch_id']) && in_array($name, ['receivables', 'marketing', 'delivery-costs']), 422, 'This report uses organization-wide balances. Select All branches with an authorized account.');
         $data = match ($name) {
             'sales-by-day' => $this->reports->salesByDay($f),
             'sales-by-branch' => $this->reports->salesByBranch($f),
@@ -31,7 +32,7 @@ class ReportController extends Controller
             'stock' => $this->reports->stock($f),
             'production' => $this->reports->production($f),
             'receivables' => $this->reports->receivables(),
-            'payables' => $this->reports->payables(),
+            'payables' => $this->reports->payables($f),
             'expenses' => $this->reports->expensesByCategory($f),
             'marketing' => $this->reports->marketing($f),
             'delivery-costs' => $this->reports->deliveryCosts($f),

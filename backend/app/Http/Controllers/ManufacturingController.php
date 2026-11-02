@@ -62,12 +62,14 @@ class ManufacturingController extends Controller
             'source_warehouse_id' => 'required|exists:warehouses,id', 'target_warehouse_id' => 'required|exists:warehouses,id',
             'planned_date' => 'nullable|date', 'notes' => 'nullable|string',
         ]);
+        $this->warehouse($d['source_warehouse_id']);
+        $this->warehouse($d['target_warehouse_id']);
         return response()->json(['data' => $this->mfg->create($d)], 201);
     }
 
     public function transition(Request $r, int $id, string $action)
     {
-        $o = ProductionOrder::findOrFail($id);
+        $o = $this->scoped('production_orders', $id);
         $res = match ($action) {
             'release' => $this->mfg->release($o),
             'start' => $this->mfg->start($o),

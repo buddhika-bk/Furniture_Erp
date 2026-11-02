@@ -90,7 +90,7 @@ class DatabaseSeeder extends Seeder
         Vehicle::create(['plate' => 'VAN-1001', 'model' => 'Delivery Van', 'capacity_kg' => 1200]);
 
         DB::table('settings')->insert([
-            ['key' => 'company_name', 'value' => 'Aurum Home Textiles', 'description' => 'Company name on documents'],
+            ['key' => 'company_name', 'value' => 'Webpoint One', 'description' => 'Company name on documents'],
             ['key' => 'currency', 'value' => 'USD', 'description' => 'Display currency'],
             ['key' => 'loyalty_currency_per_point', 'value' => '10', 'description' => 'Amount spent to earn 1 loyalty point'],
             ['key' => 'loyalty_point_value', 'value' => '0.05', 'description' => 'Discount value of 1 point when redeemed'],

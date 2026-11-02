@@ -22,7 +22,7 @@
       getView().innerHTML = '<div class="card card-pad text-slate-300">Your role does not have access to any screens yet. Ask an administrator.</div>'; return;
     }
     $('#pageTitle').textContent = item[1];
-    document.title = item[1] + ' - Aurum ERP';
+    document.title = item[1] + ' - Webpoint One';
     $$('.nav-link').forEach((a) => a.classList.toggle('active', a.dataset.key === key));
     closeNav();
     const old = getView(); const clone = old.cloneNode(false); old.replaceWith(clone); clone.innerHTML = '<p class="text-slate-500">Loading...</p>';

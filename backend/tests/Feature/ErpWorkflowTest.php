@@ -12,7 +12,7 @@ class ErpWorkflowTest extends TestCase
     public function test_production_consumes_materials_and_creates_finished_goods(): void
     {
         $h = $this->loginAs();
-        $bomId = $this->getJson('/api/boms', $h)->json('data.0.id');
+        $bomId = \App\Models\Bom::where('product_id', Product::where('sku', 'FG-BS-Q')->value('id'))->value('id');
         $raw = Warehouse::where('code', 'FAC-RAW')->first(); $fg = Warehouse::where('code', 'FAC-FG')->first();
         $id = $this->postJson('/api/production-orders', ['bom_id' => $bomId, 'batches' => 2, 'source_warehouse_id' => $raw->id, 'target_warehouse_id' => $fg->id], $h)->assertCreated()->json('data.id');
         $this->postJson("/api/production-orders/$id/release", [], $h)->assertOk();
@@ -31,7 +31,10 @@ class ErpWorkflowTest extends TestCase
         $res = $this->postJson('/api/pos/checkout', ['items' => [['product_id' => $q->id, 'qty' => 2]], 'payments' => [['method' => 'cash', 'amount' => 99.80]]], $h)->assertCreated();
         $this->assertEquals(23, (float) StockBalance::where('product_id', $q->id)->where('warehouse_id', Warehouse::where('code', 'WH-SR1')->value('id'))->value('qty'));
         $this->postJson('/api/pos/checkout', ['items' => [['product_id' => $q->id, 'qty' => 500]], 'payments' => [['method' => 'cash', 'amount' => 24950]]], $h)->assertStatus(422);
-        $this->postJson('/api/invoices/' . $res->json('data.id') . '/return', ['refund_method' => 'cash', 'items' => [['product_id' => $q->id, 'qty' => 1]]], $h)->assertCreated();
+        $return = ['refund_method' => 'cash', 'items' => [['product_id' => $q->id, 'qty' => 1]]];
+        $this->postJson('/api/invoices/' . $res->json('data.id') . '/return', $return, $h)->assertForbidden();
+        $manager = $this->postJson('/api/auth/login', ['email' => 'manager1@erp.test', 'password' => 'Password@123'])->assertOk()->json('token');
+        $this->postJson('/api/invoices/' . $res->json('data.id') . '/return', $return, ['Authorization' => 'Bearer '.$manager])->assertCreated();
         $this->assertEquals(24, (float) StockBalance::where('product_id', $q->id)->where('warehouse_id', Warehouse::where('code', 'WH-SR1')->value('id'))->value('qty'));
     }
 

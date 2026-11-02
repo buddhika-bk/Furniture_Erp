@@ -171,7 +171,7 @@
   };
 
   function receiptHtml(i) {
-    return `<div id="receipt" class="text-sm"><div class="text-center mb-3"><div class="font-display text-xl font-extrabold grad-text">Aurum</div><div class="text-slate-300">Invoice ${esc(i.number)}</div><div class="text-xs text-slate-500">${esc(fmt.dt(i.created_at))}</div></div>
+    return `<div id="receipt" class="text-sm"><div class="text-center mb-3"><div class="font-display text-xl font-extrabold grad-text">Webpoint One</div><div class="text-slate-300">Invoice ${esc(i.number)}</div><div class="text-xs text-slate-500">${esc(fmt.dt(i.created_at))}</div></div>
       ${table([{ label: 'Item', get: (x) => x.product?.name || '' }, { label: 'Qty', num: true, get: (x) => fmt.num(x.qty, 3) }, { label: 'Price', num: true, get: (x) => fmt.money(x.unit_price) }, { label: 'Total', num: true, get: (x) => fmt.money(x.line_total) }], i.items || [])}
       <dl class="mt-3 space-y-1 text-slate-300"><div class="flex justify-between"><dt>Subtotal</dt><dd>${fmt.money(i.subtotal)}</dd></div><div class="flex justify-between"><dt>Discount</dt><dd>-${fmt.money(Number(i.discount) + Number(i.loyalty_discount || 0))}</dd></div><div class="flex justify-between font-bold text-base text-white"><dt>Total</dt><dd>${fmt.money(i.total)}</dd></div>
       ${(i.payments || []).map((p) => `<div class="flex justify-between"><dt>Paid by ${esc(p.method)}</dt><dd>${fmt.money(p.amount)}</dd></div>`).join('')}${Number(i.credit_amount) > 0 ? `<div class="flex justify-between"><dt>On credit</dt><dd>${fmt.money(i.credit_amount)}</dd></div>` : ''}</dl>

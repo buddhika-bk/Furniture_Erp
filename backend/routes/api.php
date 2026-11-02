@@ -5,7 +5,16 @@ use Illuminate\Support\Facades\Route;
 Route::get('/ping', fn () => ['app' => config('app.name'), 'status' => 'ok']);
 Route::post('/auth/login', [C\AuthController::class, 'login'])->middleware('throttle:10,1');
 
-Route::middleware(['auth.token', 'throttle:240,1'])->group(function () {
+Route::middleware(['auth.token', 'workspace', 'throttle:240,1'])->group(function () {
+    Route::get('/apps', [C\WorkspaceController::class, 'apps']);
+    Route::get('/lookups/{resource}', [C\WorkspaceController::class, 'lookups']);
+    Route::get('/search', [C\WorkspaceController::class, 'search']);
+    Route::patch('/profile', [C\WorkspaceController::class, 'profile']);
+    Route::put('/profile/password', [C\WorkspaceController::class, 'password'])->middleware('throttle:5,1');
+    Route::patch('/preferences', [C\WorkspaceController::class, 'preferences']);
+    Route::get('/notifications', [C\WorkspaceController::class, 'notifications'])->middleware('perm:dashboard.view');
+    Route::post('/notifications/read', [C\WorkspaceController::class, 'readNotifications'])->middleware('perm:dashboard.view');
+    Route::get('/operations/{key}', [C\WorkspaceController::class, 'operation']);
     Route::get('/auth/me', [C\AuthController::class, 'me']);
     Route::post('/auth/logout', [C\AuthController::class, 'logout']);
 
@@ -37,7 +46,7 @@ Route::middleware(['auth.token', 'throttle:240,1'])->group(function () {
 
     // POS & sales
     Route::get('/pos/catalog', [C\SalesController::class, 'catalog'])->middleware('perm:sales.view');
-    Route::post('/pos/checkout', [C\SalesController::class, 'checkout'])->middleware('perm:sales.create');
+    Route::post('/pos/checkout', [C\SalesController::class, 'checkout'])->middleware(['perm:sales.create', 'idempotent']);
     Route::post('/invoices/{id}/return', [C\SalesController::class, 'returnItems'])->middleware('perm:sales.cancel');
     Route::post('/cashier-sessions/open', [C\SalesController::class, 'openSession'])->middleware('perm:sales.create');
     Route::post('/cashier-sessions/{id}/close', [C\SalesController::class, 'closeSession'])->middleware('perm:sales.create');

@@ -34,6 +34,7 @@
   }
 
   function modal(title, html, opts = {}) {
+    const opener = document.activeElement;
     const back = document.createElement('div');
     back.className = 'modal-back';
     back.innerHTML = `<div class="modal ${opts.wide ? 'wide' : ''}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
@@ -42,12 +43,22 @@
         <button class="btn-icon" data-close aria-label="Close">&times;</button></div>
       <div class="p-5" data-body>${html}</div></div>`;
     $('#modalRoot').appendChild(back);
-    const close = () => { back.remove(); document.removeEventListener('keydown', onKey); opts.onClose && opts.onClose(); };
-    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    const close = () => { back.remove(); document.removeEventListener('keydown', onKey); if (opener?.isConnected) opener.focus(); opts.onClose && opts.onClose(); };
+    const onKey = (e) => {
+      if (back !== $('#modalRoot').lastElementChild) return;
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      if (e.key === 'Tab') {
+        const targets = $$('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex="0"]', back).filter(el => el.getClientRects().length);
+        const first = targets[0], last = targets[targets.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+      }
+    };
     document.addEventListener('keydown', onKey);
     back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
     $$('[data-close]', back).forEach((b) => b.addEventListener('click', close));
     back.close = close; back.body = $('[data-body]', back);
+    requestAnimationFrame(() => $('input,select,textarea,button',back)?.focus());
     return back;
   }
 
@@ -55,17 +66,18 @@
     let done = false;
     const m = modal('Please confirm', `<p class="mb-5 text-slate-300">${esc(msg)}</p><div class="flex justify-end gap-2"><button class="btn btn-ghost" data-no>Cancel</button><button class="btn btn-brand" data-yes>${esc(label)}</button></div>`, { onClose: () => { if (!done) { done = true; res(false); } } });
     $('[data-no]', m).onclick = () => m.close();
-    $('[data-yes]', m).onclick = () => { done = true; m.remove(); res(true); };
+    $('[data-yes]', m).onclick = () => { done = true; m.close(); res(true); };
   });
 
   /* ---- option sources (cached) ---- */
   const optCache = {};
   async function options(src) {
     if (Array.isArray(src)) return src.map((o) => (Array.isArray(o) ? o : [o, fmt.label(o)]));
-    const key = src.res + JSON.stringify(src.params || {});
+    const key = API.user?.id + ':' + API.branch + ':' + src.res + JSON.stringify(src.params || {});
     if (!optCache[key]) {
-      const r = await API.get('/' + src.res, { per_page: 200, ...(src.params || {}) }).catch(() => ({ data: [] }));
-      optCache[key] = (r.data || []).map((x) => [x.id, src.label ? src.label(x) : x.name]);
+      const rows = []; let page = 1, result;
+      do { result = await API.get('/lookups/' + src.res, { per_page: 200, page, ...(src.params || {}) }); rows.push(...(result.data || [])); page++; } while (page <= (result.last_page || 1));
+      optCache[key] = rows.map((x) => [x.id, src.label ? src.label(x) : x.name]);
     }
     return optCache[key];
   }
@@ -114,7 +126,7 @@
       <div class="mt-5 flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-brand" type="submit">${esc(submit)}</button></div></form>`;
     $$('[data-close]', m.body).forEach((b) => b.addEventListener('click', m.close));
     const form = $('form', m.body);
-    if (extra && extra.mount) extra.mount($('[data-extra]', m.body));
+    if (extra && extra.mount) await extra.mount($('[data-extra]', m.body));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const btn = $('button[type=submit]', form); btn.disabled = true;
@@ -122,8 +134,16 @@
         const data = collect(form, fields);
         if (extra && extra.collect) Object.assign(data, extra.collect($('[data-extra]', m.body)));
         await onSubmit(data, m);
+        document.dispatchEvent(new Event('workspace-saved'));
         m.close();
-      } catch (err) { const box = $('#formErr', m.body); box.textContent = err.message; box.classList.remove('hidden'); btn.disabled = false; }
+      } catch (err) {
+        const box = $('#formErr', m.body); box.textContent = err.message; box.classList.remove('hidden');
+        $$('[data-field-error]',form).forEach(el=>el.remove());
+        $$('[aria-invalid]',form).forEach(el=>{el.removeAttribute('aria-invalid');el.removeAttribute('aria-describedby');});
+        let first;
+        Object.entries(err.fields||{}).forEach(([name,messages])=>{const field=form.elements.namedItem(name);if(!field)return;field.setAttribute('aria-invalid','true');const hint=document.createElement('span');hint.dataset.fieldError='';hint.id='error_'+name;hint.className='field-error';hint.textContent=messages.join(' ');field.setAttribute('aria-describedby',hint.id);field.after(hint);first ||=field;});
+        first?.focus(); btn.disabled = false;
+      }
     });
     return m;
   }
@@ -152,7 +172,8 @@
   /* =========================================================
      CHARTS
      ========================================================= */
-  const PALETTE = ['#818CF8', '#A78BFA', '#F472B6', '#34D399', '#FBBF24', '#38BDF8', '#FB7185', '#4ADE80', '#FACC15', '#22D3EE'];
+  const PALETTE = ['#5C83F5', '#9C84EF', '#59BDA4', '#F6B17B', '#72BCE8', '#E789AD', '#7AA8EF', '#9BCB9E', '#D9B571', '#6CB9C7'];
+  let chartId = 0;
 
   function emptyChart(msg) { return `<div class="grid place-items-center h-48 text-slate-500 text-sm">${esc(msg)}</div>`; }
 
@@ -176,6 +197,7 @@
   /* --- vertical bar chart --- */
   function vBarChart(rows, xKey, val, { height = 260, fmtY = fmt.compact, color = '#818CF8', color2 = '#A78BFA' } = {}) {
     if (!rows || !rows.length) return emptyChart('No data in this period yet.');
+    const gradientId = `bar-gradient-${++chartId}`;
     const w = 720, h = height, padL = 46, padR = 12, padT = 16, padB = 32;
     const innerW = w - padL - padR, innerH = h - padT - padB;
     const max = Math.max(1, ...rows.map((r) => Number(r[val]) || 0)) * 1.15;
@@ -194,7 +216,7 @@
       const x = padL + step * i + (step - barW) / 2;
       const y = padT + innerH - bh;
       return `<g class="vbar" style="animation-delay:${i * 40}ms">
-        <rect x="${x}" y="${y}" width="${barW}" height="${bh}" rx="6" fill="url(#vbg)" />
+        <rect x="${x}" y="${y}" width="${barW}" height="${bh}" rx="6" fill="url(#${gradientId})" data-chart-tip="${esc(String(r[xKey])+': '+fmtY(v))}" tabindex="0" role="img" aria-label="${esc(String(r[xKey])+': '+fmtY(v))}" />
         <rect x="${x}" y="${y}" width="${barW}" height="3" rx="1.5" fill="${color2}" opacity=".9" />
       </g>
       <text x="${x + barW / 2}" y="${y - 6}" text-anchor="middle" fill="#E2E8F0" font-size="10" font-weight="700">${esc(fmtY(v))}</text>`;
@@ -203,7 +225,7 @@
     const labels = rows.map((r, i) => `<text x="${padL + step * i + step / 2}" y="${h - 10}" text-anchor="middle" fill="#94A3B8" font-size="10">${esc(String(r[xKey]).slice(0, 12))}</text>`).join('');
 
     return `<svg viewBox="0 0 ${w} ${h}" class="chart-svg" preserveAspectRatio="xMidYMid meet">
-      <defs><linearGradient id="vbg" x1="0" y1="0" x2="0" y2="1">
+      <defs><linearGradient id="${gradientId}" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="${color2}"/><stop offset="1" stop-color="${color}" stop-opacity=".55"/>
       </linearGradient></defs>
       ${grid}${bars}${labels}
@@ -213,6 +235,7 @@
   /* --- multi-series line / area chart --- */
   function lineChart(rows, xKey, series, { height = 280, fmtY = fmt.compact, area = true } = {}) {
     if (!rows || rows.length < 1) return emptyChart('No data in this period yet.');
+    const gradientId = `line-gradient-${++chartId}`;
     const w = 820, h = height, padL = 52, padR = 18, padT = 18, padB = 34;
     const innerW = w - padL - padR, innerH = h - padT - padB;
     const allVals = rows.flatMap((r) => series.map((s) => Number(r[s.key]) || 0));
@@ -220,7 +243,7 @@
     const stepX = rows.length > 1 ? innerW / (rows.length - 1) : innerW;
     const P = (i, v) => [padL + i * stepX, padT + innerH - (v / max) * innerH];
 
-    const defs = series.map((s, i) => `<linearGradient id="lg-${i}" x1="0" x2="0" y1="0" y2="1">
+    const defs = series.map((s, i) => `<linearGradient id="${gradientId}-${i}" x1="0" x2="0" y1="0" y2="1">
       <stop offset="0" stop-color="${s.color}" stop-opacity="0.35"/>
       <stop offset="1" stop-color="${s.color}" stop-opacity="0"/>
     </linearGradient>`).join('');
@@ -235,9 +258,9 @@
       const pts = rows.map((r, i) => P(i, Number(r[s.key]) || 0));
       const line = 'M' + pts.map((p) => p.map((x) => x.toFixed(1)).join(',')).join(' L');
       const areaSvg = area
-        ? `<path d="${line} L${pts[pts.length - 1][0].toFixed(1)},${padT + innerH} L${pts[0][0].toFixed(1)},${padT + innerH} Z" fill="url(#lg-${si})"/>`
+        ? `<path d="${line} L${pts[pts.length - 1][0].toFixed(1)},${padT + innerH} L${pts[0][0].toFixed(1)},${padT + innerH} Z" fill="url(#${gradientId}-${si})"/>`
         : '';
-      const dots = pts.map((p) => `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" fill="#0F1524" stroke="${s.color}" stroke-width="2"/>`).join('');
+      const dots = pts.map((p,pi) => `<circle data-chart-tip="${esc(String(rows[pi][xKey])+' · '+(s.label||fmt.label(s.key))+': '+fmtY(rows[pi][s.key]))}" tabindex="0" role="img" aria-label="${esc(String(rows[pi][xKey])+': '+fmtY(rows[pi][s.key]))}" cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="3" fill="#0F1524" stroke="${s.color}" stroke-width="2"/>`).join('');
       return areaSvg + `<path class="draw" d="${line}" stroke="${s.color}" stroke-width="2.6" fill="none" stroke-linejoin="round" stroke-linecap="round"/>` + dots;
     }).join('');
 
@@ -267,7 +290,7 @@
       const frac = val / total;
       const dash = frac * circ;
       const color = s.color || PALETTE[i % PALETTE.length];
-      const seg = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}"
+      const seg = `<circle data-chart-tip="${esc(s.label+': '+fmt.num(val)+' ('+(frac*100).toFixed(1)+'%)')}" tabindex="0" role="img" aria-label="${esc(s.label+': '+fmt.num(val))}" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}"
         stroke-width="${thickness}" stroke-dasharray="${dash.toFixed(2)} ${(circ - dash).toFixed(2)}"
         stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})" stroke-linecap="butt" />`;
       offset += dash;
@@ -312,9 +335,8 @@
       ? `<div class="delta ${deltaDir}">${deltaDir === 'up' ? '▲' : '▼'} ${esc(delta)}</div>`
       : '';
     return `<div class="${cls}">
-      ${iconSvg}
-      <div class="lbl">${esc(label)}</div>
-      <div class="v mt-1 break-words">${value}</div>
+      <div class="metric-top"><div class="lbl">${esc(label)}</div><span aria-hidden="true">···</span></div>
+      <div class="metric-body"><div class="v break-words">${value}</div>${iconSvg}</div>
       ${deltaHtml ? `<div class="mt-2">${deltaHtml}</div>` : ''}
     </div>`;
   }

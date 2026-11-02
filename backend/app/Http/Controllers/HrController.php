@@ -12,7 +12,7 @@ class HrController extends Controller
 
     public function decideLeave(int $id, string $decision)
     {
-        $l = Leave::findOrFail($id);
+        $l = $this->scoped('leaves', $id);
         abort_if($l->status !== 'pending', 422, 'Leave already decided.');
         $l->update(['status' => $decision === 'approve' ? 'approved' : 'rejected']);
         return response()->json(['data' => $l]);
@@ -24,7 +24,7 @@ class HrController extends Controller
         return response()->json(['data' => PayrollPeriod::create($d)], 201);
     }
 
-    public function generate(int $id) { return response()->json(['data' => $this->payroll->generate(PayrollPeriod::findOrFail($id))]); }
-    public function advance(int $id) { return response()->json(['data' => $this->payroll->advance(PayrollPeriod::findOrFail($id))]); }
-    public function period(int $id) { return response()->json(['data' => PayrollPeriod::with('payslips.employee')->findOrFail($id)]); }
+    public function generate(int $id) { abort_if(auth_user()->branchScope(),403,'Organization-wide payroll requires organization access.'); return response()->json(['data' => $this->payroll->generate(PayrollPeriod::findOrFail($id))]); }
+    public function advance(int $id) { abort_if(auth_user()->branchScope(),403,'Organization-wide payroll requires organization access.'); return response()->json(['data' => $this->payroll->advance(PayrollPeriod::findOrFail($id))]); }
+    public function period(int $id) { return response()->json(['data' => PayrollPeriod::with(['payslips' => fn ($q) => $q->with('employee')->when(auth_user()->branchScope(), fn ($q,$branch) => $q->whereHas('employee',fn ($e)=>$e->where('branch_id',$branch)))])->findOrFail($id)]); }
 }

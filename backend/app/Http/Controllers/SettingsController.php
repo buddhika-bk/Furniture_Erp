@@ -18,5 +18,10 @@ class SettingsController extends Controller
         return $this->index();
     }
 
-    public function markAlertsRead() { Alert::whereNull('read_at')->update(['read_at' => now()]); return response()->json(['message' => 'Done.']); }
+    public function markAlertsRead()
+    {
+        $alerts = Alert::query()->when(auth_user()->branchScope(), fn ($q, $scope) => $q->where(fn ($w) => $w->whereNull('branch_id')->orWhere('branch_id', $scope)))->pluck('id');
+        foreach ($alerts as $id) \Illuminate\Support\Facades\DB::table('notification_reads')->updateOrInsert(['user_id' => auth_user_id(), 'alert_id' => $id], ['read_at' => now()]);
+        return response()->json(['message' => 'Notifications marked as read for your account.']);
+    }
 }

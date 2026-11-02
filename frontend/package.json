@@ -1,0 +1,12 @@
+{
+  "name": "webpoint-one-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "build:css": "tailwindcss -i src/styles/tailwind.css -o assets/css/utilities.css --minify"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  }
+}

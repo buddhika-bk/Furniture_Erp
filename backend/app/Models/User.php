@@ -9,7 +9,7 @@ class User extends Authenticatable
     use Auditable;
     protected $guarded = [];
     protected $hidden = ['password', 'api_token'];
-    protected $casts = ['password' => 'hashed', 'is_active' => 'boolean', 'last_login_at' => 'datetime', 'token_expires_at' => 'datetime'];
+    protected $casts = ['password' => 'hashed', 'is_active' => 'boolean', 'last_login_at' => 'datetime', 'token_expires_at' => 'datetime', 'ui_preferences' => 'array'];
 
     public function role() { return $this->belongsTo(Role::class); }
     public function branch() { return $this->belongsTo(Branch::class); }
@@ -25,7 +25,8 @@ class User extends Authenticatable
     /** Branch-restricted users can only see their own branch (spec: branch-level access restrictions). */
     public function branchScope(): ?int
     {
-        if ($this->role?->all_branches || !$this->branch_id) return null;
-        return $this->branch_id;
+        if (request()->attributes->has('workspace_branch_id')) return (int) request()->attributes->get('workspace_branch_id');
+        if ($this->role?->all_branches) return null;
+        return $this->branch_id ? (int) $this->branch_id : -1;
     }
 }

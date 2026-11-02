@@ -13,6 +13,19 @@ class ReportService
 
     private function branch(array $f): ?int { return !empty($f['branch_id']) ? (int) $f['branch_id'] : null; }
 
+    private function scopedTable(string $table, array $f)
+    {
+        $q = DB::table($table);
+        $branch = $this->branch($f);
+        if (!$branch) return $q;
+        $warehouses = DB::table('warehouses')->where('branch_id', $branch)->select('id');
+        if (in_array($table, ['stock_balances', 'stock_adjustments', 'purchase_orders'])) return $q->whereIn($table.'.warehouse_id', $warehouses);
+        if ($table === 'production_orders') return $q->whereIn('production_orders.target_warehouse_id', $warehouses);
+        if ($table === 'commissions') return $q->whereIn('commissions.employee_id', DB::table('employees')->where('branch_id', $branch)->select('id'));
+        if ($table === 'supplier_invoices') return $q->whereIn('supplier_invoices.goods_receipt_id', DB::table('goods_receipts')->join('purchase_orders','purchase_orders.id','=','goods_receipts.purchase_order_id')->whereIn('purchase_orders.warehouse_id',$warehouses)->select('goods_receipts.id'));
+        return $q->where($table.'.branch_id', $branch);
+    }
+
     private function invoices(array $f)
     {
         [$a, $b] = $this->range($f);
@@ -46,20 +59,20 @@ class ReportService
             ->sum(DB::raw('(invoice_items.qty - invoice_items.returned_qty) * invoice_items.unit_cost'));
         $net = $gross - $returns;
         $expenses = (float) $this->expenses($f)->sum('amount');
-        $lowStock = DB::table('stock_balances')->join('products', 'products.id', '=', 'stock_balances.product_id')
+        $lowStock = $this->scopedTable('stock_balances', $f)->join('products', 'products.id', '=', 'stock_balances.product_id')
             ->whereColumn('stock_balances.qty', '<=', 'products.reorder_level')->where('products.reorder_level', '>', 0)->count();
 
         return [
             'sales' => round($net, 2), 'invoice_count' => (clone $inv)->count(), 'cogs' => round($cogs, 2),
             'gross_profit' => round($net - $cogs, 2), 'expenses' => round($expenses, 2), 'net_profit' => round($net - $cogs - $expenses, 2),
-            'receivables' => (float) DB::table('customers')->sum('credit_balance'),
-            'payables' => (float) DB::table('suppliers')->sum('outstanding_balance'),
-            'production_output' => (float) DB::table('production_orders')->where('status', 'completed')->whereBetween('completed_at', $this->range($f))->sum('qty_produced'),
-            'open_production_orders' => DB::table('production_orders')->whereIn('status', ['draft', 'released', 'in_progress'])->count(),
-            'stock_value' => round((float) DB::table('stock_balances')->join('products', 'products.id', '=', 'stock_balances.product_id')->sum(DB::raw('stock_balances.qty * products.cost_price')), 2),
+            'receivables' => $this->branch($f) ? null : (float) DB::table('customers')->sum('credit_balance'),
+            'payables' => (float) $this->scopedTable('supplier_invoices', $f)->sum(DB::raw('amount - paid')),
+            'production_output' => (float) $this->scopedTable('production_orders', $f)->where('status', 'completed')->whereBetween('completed_at', $this->range($f))->sum('qty_produced'),
+            'open_production_orders' => $this->scopedTable('production_orders', $f)->whereIn('status', ['draft', 'released', 'in_progress'])->count(),
+            'stock_value' => round((float) $this->scopedTable('stock_balances', $f)->join('products', 'products.id', '=', 'stock_balances.product_id')->sum(DB::raw('stock_balances.qty * products.cost_price')), 2),
             'low_stock_items' => $lowStock,
-            'pending_approvals' => DB::table('expenses')->where('status', 'pending')->count() + DB::table('stock_adjustments')->where('status', 'pending')->count()
-                + DB::table('purchase_orders')->where('status', 'draft')->count() + DB::table('commissions')->where('status', 'pending')->count(),
+            'pending_approvals' => $this->scopedTable('expenses', $f)->where('status', 'pending')->count() + $this->scopedTable('stock_adjustments', $f)->where('status', 'pending')->count()
+                + $this->scopedTable('purchase_orders', $f)->where('status', 'draft')->count() + $this->scopedTable('commissions', $f)->where('status', 'pending')->count(),
             'sales_by_day' => $this->salesByDay($f),
             'sales_by_branch' => $this->salesByBranch($f),
         ];
@@ -81,7 +94,7 @@ class ReportService
     {
         return DB::table('invoice_items')->join('invoices', 'invoices.id', '=', 'invoice_items.invoice_id')->join('products', 'products.id', '=', 'invoice_items.product_id')
             ->whereBetween('invoices.created_at', $this->range($f))->when($this->branch($f), fn ($q, $br) => $q->where('invoices.branch_id', $br))
-            ->selectRaw('products.sku, products.name, SUM(invoice_items.qty - invoice_items.returned_qty) as qty, SUM((invoice_items.qty - invoice_items.returned_qty) * invoice_items.unit_price) as revenue')
+            ->selectRaw('products.sku, products.name, SUM(invoice_items.qty - invoice_items.returned_qty) as qty, SUM((invoice_items.qty - invoice_items.returned_qty) * invoice_items.unit_price * CASE WHEN invoices.subtotal > 0 THEN invoices.total / invoices.subtotal ELSE 0 END) as revenue')
             ->groupBy('products.sku', 'products.name')->orderByDesc('revenue')->get()->all();
     }
 
@@ -91,7 +104,7 @@ class ReportService
             ->whereBetween('invoices.created_at', $this->range($f))->when($this->branch($f), fn ($q, $br) => $q->where('invoices.branch_id', $br))
             ->selectRaw('products.sku, products.name,
                 SUM(invoice_items.qty - invoice_items.returned_qty) as qty,
-                SUM((invoice_items.qty - invoice_items.returned_qty) * invoice_items.unit_price) as revenue,
+                SUM((invoice_items.qty - invoice_items.returned_qty) * invoice_items.unit_price * CASE WHEN invoices.subtotal > 0 THEN invoices.total / invoices.subtotal ELSE 0 END) as revenue,
                 SUM((invoice_items.qty - invoice_items.returned_qty) * invoice_items.unit_cost) as cost')
             ->groupBy('products.sku', 'products.name')->get()
             ->map(fn ($r) => ['sku' => $r->sku, 'name' => $r->name, 'qty' => (float) $r->qty, 'revenue' => round((float) $r->revenue, 2), 'cost' => round((float) $r->cost, 2),
@@ -102,7 +115,7 @@ class ReportService
     {
         [$a, $b] = $this->range($f);
         $rows = [];
-        foreach (DB::table('branches')->get() as $br) {
+        foreach (DB::table('branches')->when($this->branch($f), fn ($q, $br) => $q->where('id', $br))->get() as $br) {
             $g = ['from' => $f['from'] ?? null, 'to' => $f['to'] ?? null, 'branch_id' => $br->id];
             $rev = (float) $this->invoices($g)->sum('total') - $this->returned($g);
             $cogs = (float) DB::table('invoice_items')->join('invoices', 'invoices.id', '=', 'invoice_items.invoice_id')->where('invoices.branch_id', $br->id)
@@ -117,7 +130,7 @@ class ReportService
     {
         $d = $this->dashboard($f);
         [$a, $b] = $this->range($f);
-        $payroll = (float) DB::table('financial_transactions')->where('category', 'payroll')->whereBetween('created_at', [$a, $b])->sum('amount');
+        $payroll = (float) $this->scopedTable('financial_transactions', $f)->where('category', 'payroll')->whereBetween('created_at', [$a, $b])->sum('amount');
         return [
             'revenue' => $d['sales'], 'cost_of_goods_sold' => $d['cogs'], 'gross_profit' => $d['gross_profit'],
             'operating_expenses' => $d['expenses'], 'payroll' => round($payroll, 2),
@@ -127,7 +140,7 @@ class ReportService
 
     public function stock(array $f): array
     {
-        return DB::table('stock_balances')->join('products', 'products.id', '=', 'stock_balances.product_id')->join('warehouses', 'warehouses.id', '=', 'stock_balances.warehouse_id')
+        return $this->scopedTable('stock_balances', $f)->join('products', 'products.id', '=', 'stock_balances.product_id')->join('warehouses', 'warehouses.id', '=', 'stock_balances.warehouse_id')
             ->when(!empty($f['warehouse_id']), fn ($q) => $q->where('stock_balances.warehouse_id', $f['warehouse_id']))
             ->when(!empty($f['type']), fn ($q) => $q->where('products.type', $f['type']))
             ->selectRaw('products.sku, products.name, products.type, warehouses.name as warehouse, stock_balances.qty, products.reorder_level, products.cost_price, (stock_balances.qty * products.cost_price) as value')
@@ -137,7 +150,7 @@ class ReportService
     public function production(array $f): array
     {
         [$a, $b] = $this->range($f);
-        return DB::table('production_orders')->join('products', 'products.id', '=', 'production_orders.product_id')
+        return $this->scopedTable('production_orders', $f)->join('products', 'products.id', '=', 'production_orders.product_id')
             ->whereBetween('production_orders.created_at', [$a, $b])
             ->select('production_orders.number', 'products.name as product', 'production_orders.status', 'production_orders.qty_planned', 'production_orders.qty_produced', 'production_orders.wastage_qty', 'production_orders.material_cost', 'production_orders.conversion_cost', 'production_orders.unit_cost', 'production_orders.batch_no')
             ->orderByDesc('production_orders.id')->get()->all();
@@ -148,9 +161,9 @@ class ReportService
         return DB::table('customers')->where('credit_balance', '>', 0)->select('code', 'name', 'phone', 'credit_limit', 'credit_balance')->orderByDesc('credit_balance')->get()->all();
     }
 
-    public function payables(): array
+    public function payables(array $f = []): array
     {
-        return DB::table('supplier_invoices')->join('suppliers', 'suppliers.id', '=', 'supplier_invoices.supplier_id')->whereIn('supplier_invoices.status', ['unpaid', 'partial'])
+        return $this->scopedTable('supplier_invoices', $f)->join('suppliers', 'suppliers.id', '=', 'supplier_invoices.supplier_id')->whereIn('supplier_invoices.status', ['unpaid', 'partial'])
             ->selectRaw('suppliers.name as supplier, supplier_invoices.number, supplier_invoices.due_date, supplier_invoices.amount, supplier_invoices.paid, (supplier_invoices.amount - supplier_invoices.paid) as balance')
             ->orderBy('supplier_invoices.due_date')->get()->all();
     }

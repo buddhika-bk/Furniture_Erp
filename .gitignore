@@ -1,1 +1,7 @@
 /docs
+/frontend/node_modules/
+/backend/.phpunit.result.cache
+/tmp/
+/backend/.env
+/backend/.env.*
+!/backend/.env.example

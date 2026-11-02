@@ -16,20 +16,22 @@ class PurchasingController extends Controller
             'supplier_id' => 'required|exists:suppliers,id', 'warehouse_id' => 'required|exists:warehouses,id', 'order_date' => 'nullable|date', 'notes' => 'nullable|string',
             'items' => 'required|array|min:1', 'items.*.product_id' => 'required|exists:products,id', 'items.*.qty' => 'required|numeric|gt:0', 'items.*.unit_price' => 'required|numeric|min:0',
         ]);
+        $this->warehouse($d['warehouse_id']);
         return response()->json(['data' => $this->svc->createOrder($d)], 201);
     }
 
-    public function approve(int $id) { return response()->json(['data' => $this->svc->approve(PurchaseOrder::findOrFail($id))]); }
+    public function approve(int $id) { return response()->json(['data' => $this->svc->approve($this->scoped('purchase_orders', $id))]); }
 
     public function receive(Request $r, int $id)
     {
         $d = $r->validate(['batch_no' => 'nullable|string|max:40', 'lines' => 'required|array|min:1', 'lines.*.item_id' => 'required|integer', 'lines.*.qty' => 'required|numeric|gt:0']);
-        return response()->json(['data' => $this->svc->receive(PurchaseOrder::findOrFail($id), $d['lines'], $d['batch_no'] ?? null)], 201);
+        return response()->json(['data' => $this->svc->receive($this->scoped('purchase_orders', $id), $d['lines'], $d['batch_no'] ?? null)], 201);
     }
 
     public function pay(Request $r, int $id)
     {
         $d = $r->validate(['amount' => 'required|numeric|gt:0', 'account_id' => 'required|exists:accounts,id']);
-        return response()->json(['data' => $this->svc->paySupplier(SupplierInvoice::findOrFail($id), (float) $d['amount'], $d['account_id'])], 201);
+        $this->scoped('accounts', $d['account_id']);
+        return response()->json(['data' => $this->svc->paySupplier($this->scoped('supplier_invoices', $id), (float) $d['amount'], $d['account_id'])], 201);
     }
 }

@@ -4,11 +4,12 @@
     "description": "Integrated Manufacturing, Retail & Business Management ERP - Laravel backend (modular monolith)",
     "require": {
         "php": "^8.2",
-        "laravel/framework": "^11.0"
+        "laravel/framework": "^12.0"
     },
     "require-dev": {
-        "phpunit/phpunit": "^11.0",
-        "fakerphp/faker": "^1.23"
+        "fakerphp/faker": "^1.23",
+        "mockery/mockery": "~1.6.12",
+        "phpunit/phpunit": "^11.0"
     },
     "autoload": {
         "psr-4": {

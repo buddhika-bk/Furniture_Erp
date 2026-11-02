@@ -18,6 +18,8 @@ class DeliveryController extends Controller
         $d = $r->validate(['invoice_id' => 'nullable|exists:invoices,id', 'branch_id' => 'nullable|exists:branches,id', 'vehicle_id' => 'nullable|exists:vehicles,id', 'driver_id' => 'nullable|exists:employees,id',
             'destination' => 'required|string|max:255', 'route' => 'nullable|string|max:255', 'delivery_charge' => 'nullable|numeric|min:0', 'fuel_cost' => 'nullable|numeric|min:0']);
         if ($s = auth_user()->branchScope()) $d['branch_id'] = $s;
+        if (!empty($d['invoice_id'])) $this->scoped('invoices', $d['invoice_id']);
+        if (!empty($d['driver_id'])) $this->scoped('employees', $d['driver_id']);
         $d['number'] = DocNumber::next('DLV');
         return response()->json(['data' => DeliveryOrder::create($d)], 201);
     }
@@ -25,7 +27,7 @@ class DeliveryController extends Controller
     public function status(Request $r, int $id, FinanceService $finance)
     {
         $to = $r->validate(['status' => 'required|in:dispatched,delivered,cancelled'])['status'];
-        $o = DeliveryOrder::findOrFail($id);
+        $o = $this->scoped('delivery_orders', $id);
         if (!in_array($to, self::NEXT[$o->status], true)) throw new BusinessRuleException("A {$o->status} delivery cannot become {$to}.");
         $upd = ['status' => $to];
         if ($to === 'dispatched') { $upd['dispatched_at'] = now(); if ($o->vehicle_id) Vehicle::where('id', $o->vehicle_id)->update(['status' => 'in_use']); }

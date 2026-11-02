@@ -13,11 +13,17 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         apiPrefix: 'api',
         health: '/up',
+        then: function () {
+            \Illuminate\Support\Facades\Route::middleware('api')->prefix('api/v1')->group(__DIR__.'/../routes/api.php');
+        },
     )
     ->withMiddleware(function (Middleware $middleware) {
+        $middleware->api(append: [\App\Http\Middleware\RequestCorrelation::class]);
         $middleware->alias([
             'auth.token' => ApiTokenAuth::class,
             'perm' => RequirePermission::class,
+            'workspace' => \App\Http\Middleware\WorkspaceContext::class,
+            'idempotent' => \App\Http\Middleware\IdempotentCommand::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
