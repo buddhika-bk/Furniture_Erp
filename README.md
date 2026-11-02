@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # Webpoint One - Manufacturing, Retail & Business Management
+=======
+# Furniture ERP - Manufacturing, Retail & Business Management
+>>>>>>> a10abfe73d70d57bf1a513604d56226304c3e535
 
 One system for the factory, five showrooms and head office: stock, recipes and production, product costing, POS, customers and loyalty, HR and payroll, finance, purchasing, delivery, marketing and reports.
 
