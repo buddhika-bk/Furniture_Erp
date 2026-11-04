@@ -87,7 +87,8 @@ class PurchasingService
             $inv->status = $inv->paid + 0.005 >= (float) $inv->amount ? 'paid' : 'partial';
             $inv->save();
             Supplier::where('id', $inv->supplier_id)->decrement('outstanding_balance', $amount);
-            $this->finance->post($accountId, 'out', $amount, 'supplier_payment', 'supplier_payment', $pay->id, null, "Supplier invoice {$inv->number}");
+            $branch = \Illuminate\Support\Facades\DB::table('goods_receipts')->join('purchase_orders', 'purchase_orders.id', '=', 'goods_receipts.purchase_order_id')->join('warehouses', 'warehouses.id', '=', 'purchase_orders.warehouse_id')->where('goods_receipts.id', $inv->goods_receipt_id)->value('warehouses.branch_id');
+            $this->finance->post($accountId, 'out', $amount, 'supplier_payment', 'supplier_payment', $pay->id, $branch, "Supplier invoice {$inv->number}");
             return $pay;
         });
     }

@@ -94,7 +94,7 @@ class ReportService
     {
         return DB::table('invoice_items')->join('invoices', 'invoices.id', '=', 'invoice_items.invoice_id')->join('products', 'products.id', '=', 'invoice_items.product_id')
             ->whereBetween('invoices.created_at', $this->range($f))->when($this->branch($f), fn ($q, $br) => $q->where('invoices.branch_id', $br))
-            ->selectRaw('products.sku, products.name, SUM(invoice_items.qty - invoice_items.returned_qty) as qty, SUM((invoice_items.qty - invoice_items.returned_qty) * invoice_items.unit_price * CASE WHEN invoices.subtotal > 0 THEN invoices.total / invoices.subtotal ELSE 0 END) as revenue')
+            ->selectRaw('products.sku, products.name, SUM(invoice_items.qty - invoice_items.returned_qty) as qty, SUM((invoice_items.qty - invoice_items.returned_qty) * CASE WHEN invoices.pricing_version >= 2 THEN invoice_items.line_total / NULLIF(invoice_items.qty,0) ELSE invoice_items.unit_price * CASE WHEN invoices.subtotal > 0 THEN invoices.total / invoices.subtotal ELSE 0 END END) as revenue')
             ->groupBy('products.sku', 'products.name')->orderByDesc('revenue')->get()->all();
     }
 
@@ -104,7 +104,7 @@ class ReportService
             ->whereBetween('invoices.created_at', $this->range($f))->when($this->branch($f), fn ($q, $br) => $q->where('invoices.branch_id', $br))
             ->selectRaw('products.sku, products.name,
                 SUM(invoice_items.qty - invoice_items.returned_qty) as qty,
-                SUM((invoice_items.qty - invoice_items.returned_qty) * invoice_items.unit_price * CASE WHEN invoices.subtotal > 0 THEN invoices.total / invoices.subtotal ELSE 0 END) as revenue,
+                SUM((invoice_items.qty - invoice_items.returned_qty) * CASE WHEN invoices.pricing_version >= 2 THEN invoice_items.line_total / NULLIF(invoice_items.qty,0) ELSE invoice_items.unit_price * CASE WHEN invoices.subtotal > 0 THEN invoices.total / invoices.subtotal ELSE 0 END END) as revenue,
                 SUM((invoice_items.qty - invoice_items.returned_qty) * invoice_items.unit_cost) as cost')
             ->groupBy('products.sku', 'products.name')->get()
             ->map(fn ($r) => ['sku' => $r->sku, 'name' => $r->name, 'qty' => (float) $r->qty, 'revenue' => round((float) $r->revenue, 2), 'cost' => round((float) $r->cost, 2),
@@ -159,6 +159,14 @@ class ReportService
     public function receivables(): array
     {
         return DB::table('customers')->where('credit_balance', '>', 0)->select('code', 'name', 'phone', 'credit_limit', 'credit_balance')->orderByDesc('credit_balance')->get()->all();
+    }
+
+    public function invoiceBalances(array $f): array
+    {
+        return \App\Models\Invoice::where('is_order', true)->where('balance_due', '>', 0)
+            ->when($this->branch($f), fn ($q, $b) => $q->where('branch_id', $b))->orderBy('due_date')->get()
+            ->map(fn ($i) => ['number' => $i->number, 'customer' => $i->customer_snapshot['name'] ?? '', 'due_date' => $i->due_date,
+                'total' => (float) $i->total, 'paid' => (float) $i->paid, 'balance_due' => (float) $i->balance_due])->all();
     }
 
     public function payables(array $f = []): array

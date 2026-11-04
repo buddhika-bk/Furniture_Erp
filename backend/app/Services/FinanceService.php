@@ -13,15 +13,16 @@ use Illuminate\Support\Facades\DB;
 class FinanceService
 {
     /** Money in/out. Always references the originating document (spec section 16). */
-    public function post(int $accountId, string $direction, float $amount, string $category, ?string $refType, ?int $refId, ?int $branchId = null, ?string $desc = null): FinancialTransaction
+    public function post(int $accountId, string $direction, float $amount, string $category, ?string $refType, ?int $refId, ?int $branchId = null, ?string $desc = null, ?int $paymentId = null): FinancialTransaction
     {
         if ($amount <= 0) throw new BusinessRuleException('Amount must be positive.');
-        return DB::transaction(function () use ($accountId, $direction, $amount, $category, $refType, $refId, $branchId, $desc) {
+        if (!in_array($direction, ['in', 'out'], true)) throw new BusinessRuleException('Invalid transaction direction.');
+        return DB::transaction(function () use ($accountId, $direction, $amount, $category, $refType, $refId, $branchId, $desc, $paymentId) {
             $acc = Account::lockForUpdate()->findOrFail($accountId);
             $acc->balance = (float) $acc->balance + ($direction === 'in' ? $amount : -$amount);
             $acc->save();
             return FinancialTransaction::create([
-                'account_id' => $accountId, 'branch_id' => $branchId, 'direction' => $direction, 'amount' => $amount,
+                'payment_id' => $paymentId, 'account_id' => $accountId, 'branch_id' => $branchId, 'direction' => $direction, 'amount' => $amount,
                 'category' => $category, 'ref_type' => $refType, 'ref_id' => $refId, 'description' => $desc, 'user_id' => auth_user_id(),
             ]);
         });
@@ -50,6 +51,8 @@ class FinanceService
     {
         if ($e->status !== 'pending') throw new BusinessRuleException('Expense already decided.');
         return DB::transaction(function () use ($e, $approve) {
+            $e = Expense::lockForUpdate()->findOrFail($e->id);
+            if ($e->status !== 'pending') throw new BusinessRuleException('Expense already decided.');
             if ($approve) {
                 $accId = $e->account_id ?? $this->accountFor($e->branch_id, 'cash')->id;
                 $this->post($accId, 'out', (float) $e->amount, 'expense', 'expense', $e->id, $e->branch_id, $e->description);
@@ -69,16 +72,19 @@ class FinanceService
         if ($amount <= 0) throw new BusinessRuleException('Amount must be positive.');
         if ($method === 'credit') throw new BusinessRuleException('Choose cash, card or bank.');
         return DB::transaction(function () use ($c, $method, $amount, $branchId, $ref) {
+            \App\Models\User::whereKey(auth_user_id())->lockForUpdate()->firstOrFail();
+            $session = \App\Models\CashierSession::where('user_id',auth_user_id())->where('branch_id',$branchId)->where('status','open')->lockForUpdate()->first();
             $c = Customer::lockForUpdate()->find($c->id);
             if ($amount > (float) $c->credit_balance + 0.005) throw new BusinessRuleException('Payment exceeds the outstanding balance.');
             $acc = $this->accountFor($branchId, $method);
             $p = Payment::create([
-                'customer_id' => $c->id, 'branch_id' => $branchId, 'account_id' => $acc->id, 'method' => $method,
+                'customer_id' => $c->id, 'branch_id' => $branchId, 'cashier_session_id'=>$session?->id, 'account_id' => $acc->id, 'method' => $method,
                 'direction' => 'receipt', 'amount' => $amount, 'reference' => $ref, 'user_id' => auth_user_id(),
             ]);
             $c->credit_balance = max(0, (float) $c->credit_balance - $amount);
             $c->save();
-            $this->post($acc->id, 'in', $amount, 'customer_receipt', 'payment', $p->id, $branchId, "Receipt from {$c->name}");
+            if ($session && $method==='cash') $session->increment('expected_cash',$amount);
+            $this->post($acc->id, 'in', $amount, 'customer_receipt', 'payment', $p->id, $branchId, "Receipt from {$c->name}", $p->id);
             return $p;
         });
     }

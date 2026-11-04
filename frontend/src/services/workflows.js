@@ -1,3 +1,6 @@
+import { payrollView } from '../modules/hr/payroll.js';
+import { documentView, downloadPdf, collectPayment } from '../modules/sales/documents.js';
+import { closingReport } from '../modules/sales/closing-report.js';
 import { $,$$,esc,fmt,badge,toast,modal,confirmBox,formModal,linesEditor,table,barChart,vBarChart,lineChart,donutChart,sparkline,kpi,PALETTE,can,unwrap,stat,card,src,f,req,today,PRODUCT,WH,I,act } from "../components/context.js";
   const H = {
     async newTransfer(reload) {
@@ -21,13 +24,13 @@ import { $,$$,esc,fmt,badge,toast,modal,confirmBox,formModal,linesEditor,table,b
     },
     async poView(r) {
       const o = unwrap(await API.get('/purchase_orders/' + r.id));
-      modal('Purchase order ' + o.number, `<div class="flex gap-3 mb-4 flex-wrap">${badge(o.status)}<span class="text-slate-300">${esc(o.supplier?.name || '')}</span><span class="font-semibold text-white">${fmt.money(o.total)}</span></div>` +
+      modal('Purchase order ' + o.number, `<div class="flex gap-3 mb-4 flex-wrap">${badge(o.progress_status || o.status)}<span class="text-slate-300">${esc(o.supplier?.name || '')}</span><span class="font-semibold text-white">${fmt.money(o.total)}</span></div>` +
         table([{ label: 'Product', get: (i) => i.product?.name }, { label: 'Ordered', num: true, get: (i) => fmt.num(i.qty, 3) }, { label: 'Received', num: true, get: (i) => fmt.num(i.received_qty, 3) }, { label: 'Unit price', num: true, get: (i) => fmt.money(i.unit_price) }], o.items || []), { wide: true });
     },
     async poReceive(r, reload) {
       const o = unwrap(await API.get('/purchase_orders/' + r.id));
       const rows = (o.items || []).filter((i) => Number(i.qty) - Number(i.received_qty) > 0);
-      const m = modal('Receive goods - ' + o.number, `<form><div class="space-y-3">${rows.map((i) => `<label class="block"><span class="lbl">${esc(i.product?.name)} (outstanding ${fmt.num(Number(i.qty) - Number(i.received_qty), 3)})</span><input class="inp" type="number" step="any" min="0" data-item="${i.id}" value="${Number(i.qty) - Number(i.received_qty)}"></label>`).join('')}
+      const m = modal('Receive goods - ' + o.number, `<form><p class="section-description">Receiving location: <strong>${esc(o.warehouse?.name || 'Purchase order warehouse')}</strong>. These quantities are posted to this locationâ€™s stock ledger.</p><div class="space-y-3">${rows.map((i) => `<label class="block"><span class="lbl">${esc(i.product?.name)} (outstanding ${fmt.num(Number(i.qty) - Number(i.received_qty), 3)})</span><input class="inp" type="number" step="any" min="0" data-item="${i.id}" value="${Number(i.qty) - Number(i.received_qty)}"></label>`).join('')}
         <label class="block"><span class="lbl">Batch / lot number</span><input class="inp" name="batch_no"></label></div><div id="formErr" class="hidden mt-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm px-4 py-3"></div>
         <div class="mt-5 flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-mint">Receive into stock</button></div></form>`);
       $$('[data-close]', m).forEach((b) => (b.onclick = m.close));
@@ -70,8 +73,8 @@ import { $,$$,esc,fmt,badge,toast,modal,confirmBox,formModal,linesEditor,table,b
     },
     async productionView(r) {
       const o = unwrap(await API.get('/production_orders/' + r.id));
-      modal('Production order ' + o.number, `<div class="flex flex-wrap gap-3 mb-4">${badge(o.status)}<span class="text-slate-300">Batch ${esc(o.batch_no || '-')}</span><span class="text-slate-300">Planned ${fmt.num(o.qty_planned)}</span><span class="text-slate-300">Produced ${fmt.num(o.qty_produced)}</span><span class="text-slate-300">Unit cost ${fmt.money(o.unit_cost)}</span></div>` +
-        table([{ label: 'Material', get: (m) => m.product?.name }, { label: 'Required', num: true, get: (m) => fmt.num(m.required_qty, 3) }, { label: 'Issued', num: true, get: (m) => fmt.num(m.issued_qty, 3) }, { label: 'Unit cost', num: true, get: (m) => fmt.money(m.unit_cost) }], o.materials || [], 'Materials are listed once the order is released.'), { wide: true });
+      modal('Production order ' + o.number, `<div class="flex flex-wrap gap-3 mb-4">${badge(o.progress_status || o.status)}<span class="text-slate-300">Batch ${esc(o.batch_no || '-')}</span><span class="text-slate-300">Planned ${fmt.num(o.qty_planned)}</span><span class="text-slate-300">Produced ${fmt.num(o.qty_produced)}</span><span class="text-slate-300">Unit cost ${fmt.money(o.unit_cost)}</span></div>` +
+        `<p class="document-notes">${esc(o.notes || '')}</p>` + table([{ label: 'Material', get: (m) => m.product?.name }, { label: 'Required', num: true, get: (m) => fmt.num(m.required_qty, 3) }, { label: 'Issued', num: true, get: (m) => fmt.num(m.issued_qty, 3) }, { label: 'Unit cost', num: true, get: (m) => fmt.money(m.unit_cost) }], o.materials || [], 'Materials are listed once the order is released.'), { wide: true });
     },
     async productionComplete(r, reload) {
       await formModal({ title: 'Complete ' + r.number, submit: 'Complete production', values: { qty_produced: r.qty_planned, wastage_qty: 0 },
@@ -87,22 +90,30 @@ import { $,$$,esc,fmt,badge,toast,modal,confirmBox,formModal,linesEditor,table,b
       await formModal({ title: 'New payroll period', fields: [f('name', 'Name', 'text', { ...req, hint: 'For example: October 2026' }), f('start_date', 'Start', 'date', req), f('end_date', 'End', 'date', req)],
         onSubmit: async (d) => { await API.post('/payroll-periods', d); toast('Period created. Generate payslips next.'); reload(); } });
     },
-    async periodView(r) {
-      const p = unwrap(await API.get('/payroll-periods/' + r.id));
-      modal('Payslips - ' + p.name, `<div class="mb-3">${badge(p.status)}</div>` + table([{ label: 'Employee', get: (s) => s.employee?.name }, { label: 'Basic', num: true, get: (s) => fmt.money(s.basic) }, { label: 'Allowances', num: true, get: (s) => fmt.money(s.allowances) }, { label: 'OT hours', num: true, get: (s) => fmt.num(s.overtime_hours) }, { label: 'OT pay', num: true, get: (s) => fmt.money(s.overtime_amount) }, { label: 'Commission', num: true, get: (s) => fmt.money(s.commission) }, { label: 'Deductions', num: true, get: (s) => fmt.money(s.deductions) }, { label: 'Net pay', num: true, get: (s) => fmt.money(s.net) }], p.payslips || [], 'No payslips yet. Choose Generate.'), { wide: true });
+    async periodView(r) { return payrollView(r); },
+    async planDelivery(r, reload) {
+      await formModal({ title: 'Plan delivery — ' + r.number, values: r,
+        fields: [f('destination', 'Delivery address', 'text', req), f('route', 'Route'), f('vehicle_id', 'Vehicle', 'select', { options: src('vehicles', x => x.plate) }), f('driver_id', 'Driver', 'select', { options: src('employees') }), f('fuel_cost', 'Fuel paid on completion (cash)', 'number')],
+        onSubmit: async d => { await API.put('/delivery-orders/' + r.id, d); toast('Delivery updated.'); reload(); } });
     },
     async newDelivery(reload) {
       await formModal({ title: 'New delivery', submit: 'Create delivery',
-        fields: [f('invoice_id', 'Invoice', 'select', { options: src('invoices', (x) => x.number) }), f('vehicle_id', 'Vehicle', 'select', { options: src('vehicles', (x) => x.plate) }), f('driver_id', 'Driver', 'select', { options: src('employees', (x) => x.name, { 'filter[is_salesperson]': '' }) }), f('destination', 'Destination', 'text', req), f('route', 'Route'), f('delivery_charge', 'Delivery charge', 'number'), f('fuel_cost', 'Expected fuel cost', 'number')],
+        fields: [f('invoice_id', 'Invoice', 'select', { options: src('invoices', (x) => x.number) }), f('vehicle_id', 'Vehicle', 'select', { options: src('vehicles', (x) => x.plate) }), f('driver_id', 'Driver', 'select', { options: src('employees', (x) => x.name, { 'filter[is_salesperson]': '' }) }), f('destination', 'Destination', 'text', req), f('route', 'Route'), f('delivery_charge', 'Delivery charge', 'number'), f('fuel_cost', 'Fuel paid on completion (cash)', 'number')],
         onSubmit: async (d) => { await API.post('/delivery-orders', d); toast('Delivery created.'); reload(); } });
     },
     async closeSession(r, reload) {
       await formModal({ title: 'Close the till', submit: 'Close day', values: {}, fields: [f('closing_cash', 'Counted cash in drawer', 'number', req), f('notes', 'Notes', 'text', { wide: true })],
-        onSubmit: async (d) => { const x = unwrap(await API.post(`/cashier-sessions/${r.id}/close`, d)); toast(`Day closed. Variance ${fmt.money(x.variance)}.`); reload(); } });
+        onSubmit: async (d) => { const x = unwrap(await API.post(`/cashier-sessions/${r.id}/close`, d)); toast(`Day closed. Variance ${fmt.money(x.variance)}.`); reload(); await closingReport(x, true); } });
     },
+    closingReport(r) { return closingReport(r); },
+    newInvoice() { location.hash = '#/new_invoice'; },
+    newQuotation() { location.hash = '#/new_quotation'; },
+    async quotationView(r) { documentView(unwrap(await API.get('/quotations/' + r.id)), true); },
+    async invoicePdf(r) { await downloadPdf('invoices', r.id, r.number); },
+    invoicePayment(r, reload) { return collectPayment(r, reload); },
     async invoiceView(r) {
       const i = unwrap(await API.get('/invoices/' + r.id));
-      modal('Invoice ' + i.number, receiptHtml(i), { wide: false });
+      documentView(i);
     },
     async invoiceReturn(r, reload) {
       const i = unwrap(await API.get('/invoices/' + r.id));
@@ -139,8 +150,8 @@ import { $,$$,esc,fmt,badge,toast,modal,confirmBox,formModal,linesEditor,table,b
 
   function receiptHtml(i) {
     return `<div id="receipt" class="text-sm"><div class="text-center mb-3"><div class="font-display text-xl font-extrabold grad-text">Webpoint One</div><div class="text-slate-300">Invoice ${esc(i.number)}</div><div class="text-xs text-slate-500">${esc(fmt.dt(i.created_at))}</div></div>
-      ${table([{ label: 'Item', get: (x) => x.product?.name || '' }, { label: 'Qty', num: true, get: (x) => fmt.num(x.qty, 3) }, { label: 'Price', num: true, get: (x) => fmt.money(x.unit_price) }, { label: 'Total', num: true, get: (x) => fmt.money(x.line_total) }], i.items || [])}
-      <dl class="mt-3 space-y-1 text-slate-300"><div class="flex justify-between"><dt>Subtotal</dt><dd>${fmt.money(i.subtotal)}</dd></div><div class="flex justify-between"><dt>Discount</dt><dd>-${fmt.money(Number(i.discount) + Number(i.loyalty_discount || 0))}</dd></div><div class="flex justify-between font-bold text-base text-white"><dt>Total</dt><dd>${fmt.money(i.total)}</dd></div>
+      ${table([{ label: 'Item', get: (x) => x.product?.name || '' }, { label: 'Qty', num: true, get: (x) => fmt.num(x.qty, 3) }, { label: 'Price', num: true, get: (x) => fmt.money(x.unit_price) }, {label:'Discount',num:true,get:x=>fmt.money(Number(x.discount_amount||0)+Number(x.allocated_discount_amount||0))}, { label: 'Total', num: true, get: (x) => fmt.money(x.line_total) }], i.items || [])}
+      <dl class="mt-3 space-y-1 text-slate-300"><div class="flex justify-between"><dt>Loyalty points earned</dt><dd>${Number(i.points_earned||0)}</dd></div><div class="flex justify-between"><dt>Subtotal</dt><dd>${fmt.money(i.subtotal)}</dd></div><div class="flex justify-between"><dt>Discount</dt><dd>-${fmt.money(Number(i.discount) + Number(i.loyalty_discount || 0))}</dd></div><div class="flex justify-between font-bold text-base text-white"><dt>Total</dt><dd>${fmt.money(i.total)}</dd></div>
       ${(i.payments || []).map((p) => `<div class="flex justify-between"><dt>Paid by ${esc(p.method)}</dt><dd>${fmt.money(p.amount)}</dd></div>`).join('')}${Number(i.credit_amount) > 0 ? `<div class="flex justify-between"><dt>On credit</dt><dd>${fmt.money(i.credit_amount)}</dd></div>` : ''}</dl>
       ${Number(i.points_earned) ? `<p class="mt-3 text-xs text-slate-400">Points earned: ${fmt.num(i.points_earned, 0)}</p>` : ''}<button class="btn btn-brand w-full mt-4 print:hidden" onclick="window.print()">Print receipt</button></div>`;
   }

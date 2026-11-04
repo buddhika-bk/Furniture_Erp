@@ -54,13 +54,17 @@ class ManufacturingService
 
     public function release(ProductionOrder $o): ProductionOrder
     {
-        $this->guard($o, 'released');
-        $o->update(['status' => 'released', 'approved_by' => auth_user_id()]);
-        return $o;
+        return DB::transaction(function () use ($o) {
+            $o = ProductionOrder::lockForUpdate()->findOrFail($o->id);
+            $this->guard($o, 'released');
+            $o->update(['status' => 'released', 'approved_by' => auth_user_id()]);
+            return $o;
+        });
     }
 
     public function cancel(ProductionOrder $o): ProductionOrder
     {
+        if (\App\Models\ManufacturingRequest::where('production_order_id', $o->id)->exists()) throw new BusinessRuleException('This order is linked to a customer invoice and cannot be cancelled independently.');
         $this->guard($o, 'cancelled');
         $o->update(['status' => 'cancelled']);
         return $o;
@@ -96,20 +100,36 @@ class ManufacturingService
         return DB::transaction(function () use ($o, $qtyProduced, $wastage) {
             $o = ProductionOrder::lockForUpdate()->with('bom')->findOrFail($o->id);
             $this->guard($o, 'completed');
+            $request = \App\Models\ManufacturingRequest::where('production_order_id', $o->id)->lockForUpdate()->first();
+            if ($request && $qtyProduced + 0.00001 < (float) $request->qty) throw new BusinessRuleException('Produce the full customer-requested quantity before completing this order.');
             $bom = $o->bom;
-            $conversion = (float) $o->batches * ((float) $bom->labour_cost + (float) $bom->packaging_cost + (float) $bom->overhead_cost + (float) $bom->extra_cost);
+            $costBatches = $request ? (float) $request->qty / (float) $bom->output_qty : (float) $o->batches;
+            $conversion = $costBatches * ((float) $bom->labour_cost + (float) $bom->packaging_cost + (float) $bom->overhead_cost + (float) $bom->extra_cost);
             $total = (float) $o->material_cost + $conversion;
             $unit = $total / $qtyProduced;
 
             $this->inventory->move($o->product_id, $o->target_warehouse_id, $qtyProduced, 'production_output', [
                 'ref_type' => 'production_order', 'ref_id' => $o->id, 'batch_no' => $o->batch_no, 'unit_cost' => $unit,
             ]);
+            if ($request) {
+                // Customer goods are already sold: allocate them immediately, never expose them as free stock.
+                $invoice = \App\Models\Invoice::lockForUpdate()->findOrFail($request->invoice_id);
+                $item = \App\Models\InvoiceItem::lockForUpdate()->findOrFail($request->invoice_item_id);
+                $this->inventory->move($o->product_id, $o->target_warehouse_id, -(float) $request->qty, 'sale', [
+                    'ref_type' => 'invoice', 'ref_id' => $invoice->id, 'unit_cost' => $unit, 'note' => 'Factory fulfilment '.$request->number,
+                ]);
+                $allocated = (float) $item->allocated_qty + (float) $request->qty;
+                $costDifference = round(($unit - (float) $item->unit_cost) * (float) $request->qty, 2);
+                $item->update(['unit_cost' => ((float) $item->unit_cost * (float) $item->allocated_qty + $unit * (float) $request->qty) / $allocated, 'allocated_qty' => $allocated]);
+                $invoice->increment('cost_total', $costDifference);
+                $request->update(['status' => 'completed']);
+            }
             $o->update([
                 'status' => 'completed', 'qty_produced' => $qtyProduced, 'wastage_qty' => $wastage,
                 'conversion_cost' => $conversion, 'unit_cost' => $unit, 'completed_at' => now(),
             ]);
 
-            $perUnit = fn ($v) => (float) $v * (float) $o->batches / $qtyProduced;
+            $perUnit = fn ($v) => (float) $v * $costBatches / $qtyProduced;
             $this->costing->recordVersion($bom, 'production', $o->id, [
                 'material' => (float) $o->material_cost / $qtyProduced,
                 'labour' => $perUnit($bom->labour_cost), 'packaging' => $perUnit($bom->packaging_cost),

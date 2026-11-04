@@ -26,5 +26,13 @@ class HrController extends Controller
 
     public function generate(int $id) { abort_if(auth_user()->branchScope(),403,'Organization-wide payroll requires organization access.'); return response()->json(['data' => $this->payroll->generate(PayrollPeriod::findOrFail($id))]); }
     public function advance(int $id) { abort_if(auth_user()->branchScope(),403,'Organization-wide payroll requires organization access.'); return response()->json(['data' => $this->payroll->advance(PayrollPeriod::findOrFail($id))]); }
-    public function period(int $id) { return response()->json(['data' => PayrollPeriod::with(['payslips' => fn ($q) => $q->with('employee')->when(auth_user()->branchScope(), fn ($q,$branch) => $q->whereHas('employee',fn ($e)=>$e->where('branch_id',$branch)))])->findOrFail($id)]); }
+    public function period(int $id)
+    {
+        $p = PayrollPeriod::with(['payslips' => fn ($q) => $q->with('employee')->when(auth_user()->branchScope(), fn ($q, $branch) => $q->whereHas('employee', fn ($e) => $e->where('branch_id', $branch)))])->findOrFail($id);
+        foreach ($p->payslips as $slip) {
+            $slip->setAttribute('attendance_details', $slip->attendance_snapshot ?? $this->payroll->attendanceDetails($slip->employee_id, $p));
+            $slip->setAttribute('attendance_source', $slip->attendance_snapshot ? 'snapshot' : 'live');
+        }
+        return response()->json(['data' => $p]);
+    }
 }

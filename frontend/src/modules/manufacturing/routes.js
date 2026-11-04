@@ -1,1 +1,1 @@
-export const routes = ["production_orders", "boms"];
+export const routes = ["production_orders", "boms", "manufacturing_requests"];

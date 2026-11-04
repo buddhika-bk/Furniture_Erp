@@ -17,6 +17,21 @@ export const registry = [
         "sales.view"
       ],
       [
+        "new_invoice",
+        "New invoice",
+        "sales.create"
+      ],
+      [
+        "quotations",
+        "Quotations",
+        "sales.view"
+      ],
+      [
+        "new_quotation",
+        "New quotation",
+        "sales.create"
+      ],
+      [
         "cashier_sessions",
         "Daily closing",
         "sales.view"
@@ -44,6 +59,11 @@ export const registry = [
         "boms",
         "Recipes (BOM)",
         "manufacturing.view"
+      ],
+      [
+        "manufacturing_requests",
+        "Customer production requests",
+        "manufacturing.view"
       ]
     ]
   },
@@ -54,6 +74,7 @@ export const registry = [
     "icon": "box",
     "color": "#3d9d8a",
     "routes": [
+      ["warranties", "Warranty", "products.view"],
       [
         "inventory",
         "Stock by location",
@@ -117,6 +138,7 @@ export const registry = [
     "icon": "users",
     "color": "#d57496",
     "routes": [
+      ["loyalty_rules", "Loyalty earning rules", "settings.view"],
       [
         "customers",
         "Customers",

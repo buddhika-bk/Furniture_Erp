@@ -9,6 +9,7 @@ class DocNumber
     public static function next(string $prefix): string
     {
         $n = DB::transaction(function () use ($prefix) {
+            DB::table('sequences')->insertOrIgnore(['key'=>$prefix,'value'=>0]);
             $row = DB::table('sequences')->where('key', $prefix)->lockForUpdate()->first();
             if (!$row) {
                 DB::table('sequences')->insert(['key' => $prefix, 'value' => 1]);

@@ -1,7 +1,8 @@
 import { $,$$,esc,fmt,badge,toast,modal,confirmBox,formModal,linesEditor,table,barChart,vBarChart,lineChart,donutChart,sparkline,kpi,PALETTE,can,unwrap,stat,card,src,f,req,today,PRODUCT,WH,I,act } from "../../components/context.js";
 import { H, receiptHtml } from "../../services/workflows.js";
   async function listPage(key, view) {
-    const def = SCHEMA.RES[key];
+    const original = SCHEMA.RES[key];
+    const def = {...original, filters:await Promise.all((original.filters||[]).map(async f=>({...f,options:f.source?await UI.options(f.source):f.options})))};
     const params = new URLSearchParams(location.hash.split('?')[1] || '');
     const st = { page: Math.max(1, Number(params.get('page')) || 1), search: params.get('search') || '', filter: {}, direction: params.get('direction') || 'desc' };
     for (const field of def.filters || []) st.filter[field.name] = params.get(field.name) || '';
@@ -9,10 +10,10 @@ import { H, receiptHtml } from "../../services/workflows.js";
     const editable = def.fields && !def.onNew && can(def.perm + '.edit');
     const canNew = def.onNew ? can(def.newPerm) : def.fields && can(def.perm + '.create');
     const canDel = def.del && can(def.perm + '.delete');
-    view.innerHTML = `<div class="resource-heading"><div><h2>${esc(def.title)}</h2><p>Manage your records, keep your business moving.</p></div><span class="resource-mark" aria-hidden="true">${I.box}</span></div><div class="card"><div class="p-4 flex flex-wrap gap-2 items-end border-b border-line">
+    view.innerHTML = `<div class="resource-heading"><div><h2>${esc(def.title)}</h2><p>${esc(def.description||'Manage your records, keep your business moving.')}</p></div><span class="resource-mark" aria-hidden="true">${I.box}</span></div><div class="card"><div class="p-4 flex flex-wrap gap-2 items-end border-b border-line">
       <label class="flex-1 min-w-[10rem]"><span class="lbl">Search</span><input class="inp" id="q" type="search" placeholder="Search ${esc(def.title.toLowerCase())}" value="${esc(st.search)}"></label>
       ${(def.filters || []).map((fl) => `<label><span class="lbl">${esc(fl.label)}</span><select class="inp" data-filter="${fl.name}"><option value="">All</option>${(fl.options || []).map((o) => { const [v, l] = Array.isArray(o) ? o : [o, fmt.label(o)]; return `<option value="${esc(v)}" ${String(st.filter[fl.name])===String(v)?'selected':''}>${esc(l)}</option>`; }).join('')}</select></label>`).join('')}
-      <label><span class="lbl">Order</span><select id="sortDirection" class="inp"><option value="desc">Newest first</option><option value="asc">Oldest first</option></select></label>${canNew ? `<button class="btn btn-brand" id="newBtn">${esc(def.newLabel || 'Add new')}</button>` : ''}</div>
+      <label><span class="lbl">Order</span><select id="sortDirection" class="inp"><option value="desc">Newest first</option><option value="asc">Oldest first</option></select></label>${['invoices','production_orders'].includes(key)?'<button class="btn btn-ghost" id="refreshStatus">Refresh status</button>':''}${canNew ? `<button class="btn btn-brand" id="newBtn">${esc(def.newLabel || 'Add new')}</button>` : ''}</div>
       <div id="listBody" aria-live="polite"></div><div id="pager" class="p-3 flex items-center justify-between gap-2 text-sm text-slate-400"></div></div>`;
     const body = $('#listBody', view), pager = $('#pager', view);
     const acts = [...(def.actions || [])];
@@ -37,7 +38,7 @@ import { H, receiptHtml } from "../../services/workflows.js";
     };
     const openForm = async (row) => {
       const values = row ? { ...row } : {};
-      await formModal({ title: (row ? 'Edit ' : 'New ') + def.title.toLowerCase().replace(/s$/, ''), fields: def.fields, values, wide: def.fields.length > 8,
+      await formModal({ title: (row ? 'Edit ' : 'New ') + def.title.toLowerCase().replace(/s$/, ''), fields: def.fields.filter(f=>(!row||!f.createOnly)&&(!f.permission||can(f.permission))), values, wide: def.fields.length > 8,
         onSubmit: async (d) => {
           if (def.passwordOptionalOnEdit && row && !d.password) delete d.password;
           if (!row) Object.keys(d).forEach((k) => d[k] === null && delete d[k]);
@@ -63,6 +64,7 @@ import { H, receiptHtml } from "../../services/workflows.js";
     if (canNew) $('#newBtn', view).onclick = () => (def.onNew ? H[def.onNew](load) : openForm(null));
     $('#sortDirection',view).value=st.direction;
     $('#sortDirection',view).onchange=e=>{st.direction=e.target.value;st.page=1;load();};
+    if ($('#refreshStatus',view)) $('#refreshStatus',view).onclick=()=>load();
     await load();
   }
 

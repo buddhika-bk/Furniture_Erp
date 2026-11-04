@@ -22,6 +22,7 @@ class ReportController extends Controller
         $f = $this->filters($r);
         abort_if(!empty($f['branch_id']) && in_array($name, ['receivables', 'marketing', 'delivery-costs']), 422, 'This report uses organization-wide balances. Select All branches with an authorized account.');
         $data = match ($name) {
+            'invoice-balances' => $this->reports->invoiceBalances($f),
             'sales-by-day' => $this->reports->salesByDay($f),
             'sales-by-branch' => $this->reports->salesByBranch($f),
             'sales-by-product' => $this->reports->salesByProduct($f),

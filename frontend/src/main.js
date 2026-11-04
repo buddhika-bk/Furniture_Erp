@@ -1,11 +1,16 @@
+import { mountClock } from './components/clock.js';
 import { mountMotion } from './components/motion.js';
 import { workspace, allowedRoutes } from './app/state.js';
 import { icon } from './components/icons.js';
 import { launcher, moduleHome } from './modules/home/launcher.js';
 const { $, $$, esc, modal, toast } = UI;
 mountMotion();
+mountClock(document.getElementById('workspaceClock'));
 let generation=0, notificationTimer, dirty=false, lastHash=location.hash;
 const loaders = {
+  new_invoice: () => import('./modules/sales/documents.js').then(m=>m.newInvoice),
+  new_quotation: () => import('./modules/sales/documents.js').then(m=>m.newQuotation),
+  manufacturing_requests: () => import('./modules/sales/documents.js').then(m=>m.manufacturingRequests),
   dashboard: () => import('./modules/home/pages.js').then(m=>m.dashboard),
   inventory: () => import('./modules/inventory/pages.js').then(m=>m.inventory),
   reports: () => import('./modules/reports/pages.js').then(m=>m.reports),
@@ -73,6 +78,7 @@ function search(){
 }
 async function enter(){
   const config=await API.get('/apps');workspace.apps=config.data;workspace.branches=config.branches;workspace.preferences=config.preferences;
+  if(config.currency)window.ERP_CONFIG.CURRENCY=config.currency+' ';
   try{workspace.recent=JSON.parse(sessionStorage.getItem('erp_recent_'+API.user.id)||'[]');}catch{workspace.recent=[];}
   document.documentElement.classList.toggle('solid-surfaces',!!workspace.preferences.solid_surfaces);
   document.documentElement.classList.toggle('compact-sidebar',!!workspace.preferences.compact_sidebar);

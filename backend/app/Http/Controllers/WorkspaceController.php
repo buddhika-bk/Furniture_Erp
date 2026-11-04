@@ -17,7 +17,7 @@ class WorkspaceController extends Controller
         $dependencies = [
             'branches' => ['sales.view', 'reports.view', 'finance.create'],
             'customers' => ['sales.create'], 'products' => ['inventory.create', 'manufacturing.view', 'purchasing.create'],
-            'warehouses' => ['manufacturing.view', 'purchasing.create', 'sales.view'],
+            'warehouses' => ['products.create', 'products.view', 'manufacturing.view', 'purchasing.create', 'sales.view'],
             'employees' => ['delivery.create', 'sales.create'], 'accounts' => ['purchasing.create'],
             'campaigns' => ['finance.create'],
         ];
@@ -31,7 +31,7 @@ class WorkspaceController extends Controller
         if ($resource === 'boms') $query->with('product:id,name');
         $result = $query->orderBy('id')->paginate(200);
         $result->setCollection($result->getCollection()->map(function ($row) use ($resource) {
-            $fields = array_intersect_key($row->toArray(), array_flip(['id', 'name', 'code', 'sku', 'variant', 'plate', 'number', 'version', 'type']));
+            $fields = array_intersect_key($row->toArray(), array_flip(['id', 'name', 'code', 'sku', 'variant', 'plate', 'number', 'version', 'type','is_walk_in']));
             if ($resource === 'boms') $fields['product'] = ['name' => $row->product?->name];
             return $fields;
         }));
@@ -59,7 +59,7 @@ class WorkspaceController extends Controller
             return $app;
         })->filter(fn ($app) => count($app['routes']))->values();
         $branches = Branch::where('is_active', true)->when(!auth_user()->role?->all_branches, fn ($q) => $q->whereKey(auth_user()->branch_id ?? -1))->get(['id', 'name', 'type']);
-        return response()->json(['data' => $apps, 'branches' => $branches, 'preferences' => auth_user()->ui_preferences ?? []]);
+        return response()->json(['data' => $apps, 'branches' => $branches, 'currency' => \App\Support\Settings::get('currency', 'LKR'), 'preferences' => auth_user()->ui_preferences ?? []]);
     }
 
     public function preferences(Request $request)

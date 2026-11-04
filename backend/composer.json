@@ -4,6 +4,7 @@
     "description": "Integrated Manufacturing, Retail & Business Management ERP - Laravel backend (modular monolith)",
     "require": {
         "php": "^8.2",
+        "dompdf/dompdf": "^3.1",
         "laravel/framework": "^12.0"
     },
     "require-dev": {

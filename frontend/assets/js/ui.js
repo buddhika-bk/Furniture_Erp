@@ -18,7 +18,7 @@
     label: (v) => String(v ?? '').replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase()),
   };
   const GOOD = ['completed', 'approved', 'received', 'paid', 'delivered', 'finalized', 'active', 'available', 'closed', 'running', 'finished', 'present'];
-  const WARN = ['pending', 'draft', 'partially_received', 'in_progress', 'released', 'dispatched', 'reviewed', 'planned', 'open', 'partial', 'unpaid', 'low', 'warning', 'late', 'partially_returned'];
+  const WARN = ['pending', 'ready', 'start', 'process', 'awaiting_bom', 'draft', 'partially_received', 'in_progress', 'released', 'dispatched', 'reviewed', 'planned', 'open', 'partial', 'unpaid', 'low', 'warning', 'late', 'partially_returned'];
   const BAD  = ['rejected', 'cancelled', 'blocked', 'terminated', 'returned', 'absent', 'critical', 'resigned', 'inactive'];
   const badge = (v) => v == null || v === '' ? '' : `<span class="badge ${GOOD.includes(v) ? 'ok' : WARN.includes(v) ? 'warn' : BAD.includes(v) ? 'bad' : 'info'}">${esc(fmt.label(v))}</span>`;
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -100,13 +100,15 @@
       const cur = new Set(v || []);
       input = `<div class="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-64 overflow-y-auto border border-line rounded-xl p-3" data-multi="${f.name}">${opts.map(([val, l]) => `<label class="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" value="${esc(val)}" class="accent-indigo-500" ${cur.has(val) ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div>`;
     } else {
-      input = `<input class="inp" type="${f.type || 'text'}" name="${f.name}" id="${id}" ${f.step ? `step="${f.step}"` : f.type === 'number' ? 'step="any"' : ''} ${f.min !== undefined ? `min="${f.min}"` : ''} value="${esc(v ?? f.default ?? '')}" ${req} ${f.type === 'password' ? 'autocomplete="new-password"' : ''}>`;
+      input = `<input class="inp" type="${f.type || 'text'}" name="${f.name}" id="${id}" ${f.step ? `step="${f.step}"` : f.type === 'number' ? 'step="any"' : ''} ${f.min !== undefined ? `min="${f.min}"` : ''} ${f.max !== undefined ? `max="${f.max}"` : ''} value="${esc(v ?? f.default ?? '')}" ${req} ${f.type === 'password' ? 'autocomplete="new-password"' : ''}>`;
     }
     return `<label class="block ${f.wide ? 'sm:col-span-2' : ''}">${lbl}${input}${f.hint ? `<span class="text-xs text-slate-500">${esc(f.hint)}</span>` : ''}</label>`;
   }
   async function formHtml(fields, values = {}) {
     const parts = await Promise.all(fields.map((f) => fieldHtml(f, values[f.name])));
-    return `<div class="grid sm:grid-cols-2 gap-4">${parts.join('')}</div>`;
+    if (!fields.some(f=>f.tab)) return `<div class="grid sm:grid-cols-2 gap-4">${parts.join('')}</div>`;
+    const tabs=[...new Set(fields.map(f=>f.tab||'Product details'))];
+    return `<div role="tablist" aria-label="Product settings">${tabs.map((t,i)=>`<button type="button" role="tab" class="btn btn-ghost" id="form-tab-${i}" aria-controls="form-panel-${i}" aria-selected="${i===0}" data-form-tab="${i}">${esc(t)}</button>`).join('')}</div>${tabs.map((t,i)=>`<div role="tabpanel" id="form-panel-${i}" aria-labelledby="form-tab-${i}" data-form-panel="${i}" ${i?'hidden':''}><div class="grid sm:grid-cols-2 gap-4">${parts.filter((_,n)=>(fields[n].tab||'Product details')===t).join('')}</div></div>`).join('')}`;
   }
   function collect(form, fields) {
     const out = {};
@@ -119,13 +121,15 @@
     });
     return out;
   }
-  async function formModal({ title, fields, values, submit = 'Save', extra, onSubmit, wide }) {
+  async function formModal({ title, fields, values, submit = 'Save', extra, onSubmit, wide, markSaved = true }) {
     const m = modal(title, '<p class="text-sm text-slate-400">Loading...</p>', { wide });
     m.body.innerHTML = `<form>${await formHtml(fields, values)}${extra ? `<div class="mt-4" data-extra>${extra.html || ''}</div>` : ''}
       <div id="formErr" class="hidden mt-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-sm px-4 py-3" role="alert"></div>
       <div class="mt-5 flex justify-end gap-2"><button type="button" class="btn btn-ghost" data-close>Cancel</button><button class="btn btn-brand" type="submit">${esc(submit)}</button></div></form>`;
     $$('[data-close]', m.body).forEach((b) => b.addEventListener('click', m.close));
     const form = $('form', m.body);
+    $$('[data-form-tab]',form).forEach(b=>b.onclick=()=>{ $$('[data-form-tab]',form).forEach(t=>t.setAttribute('aria-selected',String(t===b))); $$('[data-form-panel]',form).forEach(p=>p.hidden=p.dataset.formPanel!==b.dataset.formTab); });
+    form.addEventListener('invalid',e=>{const p=e.target.closest('[data-form-panel]');if(p)$(`[data-form-tab="${p.dataset.formPanel}"]`,form).click();},true);
     if (extra && extra.mount) await extra.mount($('[data-extra]', m.body));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();

@@ -12,6 +12,7 @@ import { toCsv } from '../../services/csv.js';
     ['stock', 'Stock on hand'],
     ['production', 'Production output and wastage'],
     ['receivables', 'Customer credit'],
+    ['invoice-balances', 'Outstanding invoice balances (all dates)'],
     ['payables', 'Supplier outstanding'],
     ['expenses', 'Expenses by category'],
     ['marketing', 'Marketing spend'],

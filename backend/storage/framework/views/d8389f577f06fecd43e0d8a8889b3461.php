@@ -1,0 +1,4 @@
+<?php echo str_replace('</head>', '<style>body{max-width:760px;margin:30px auto;font-size:12px}.footer{display:none}.print-tools{padding:16px;background:#eef0ff;margin-bottom:24px}.print-tools button{padding:10px 18px;border:0;background:#5254be;color:white;cursor:pointer}@media print{body{max-width:none;margin:0;font-size:10px}.print-tools{display:none}}</style></head>', str_replace('<body>', '<body><div class="print-tools"><button onclick="window.print()">Print invoice and factory copy</button> <span>Give the customer only the INVOICE pages. Keep FACTORY / BOM REQUEST pages for the factory.</span></div>', $content)); ?>
+
+<script>window.addEventListener('load', function(){window.print();});</script>
+<?php /**PATH F:\WebPoint\Software\erp\backend\resources\views/sales-print.blade.php ENDPATH**/ ?>

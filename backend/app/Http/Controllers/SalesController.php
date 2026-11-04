@@ -47,8 +47,10 @@ class SalesController extends Controller
         $d = $r->validate([
             'branch_id' => 'nullable|exists:branches,id', 'customer_id' => 'nullable|exists:customers,id', 'salesperson_id' => 'nullable|exists:employees,id',
             'campaign_id' => 'nullable|exists:campaigns,id', 'discount_rule_id' => 'nullable|exists:discount_rules,id', 'redeem_points' => 'nullable|integer|min:0',
-            'items' => 'required|array|min:1', 'items.*.product_id' => 'required|exists:products,id', 'items.*.qty' => 'required|numeric|gt:0',
-            'payments' => 'required|array|min:1', 'payments.*.method' => 'required|in:cash,card,bank,credit', 'payments.*.amount' => 'required|numeric|gt:0', 'payments.*.reference' => 'nullable|string|max:255',
+            'items' => 'required|array|min:1', 'items.*.product_id' => 'required|distinct|exists:products,id', 'items.*.qty' => 'required|numeric|min:0.001|max:1000000|decimal:0,3',
+            'items.*.discount_type'=>'sometimes|in:fixed,percentage','items.*.discount_value'=>'sometimes|numeric|min:0|max:999999999|decimal:0,2',
+            'bill_discount_type'=>'sometimes|in:fixed,percentage','bill_discount_value'=>'sometimes|numeric|min:0|max:999999999|decimal:0,2',
+            'payments' => 'present|array', 'payments.*.method' => 'required|in:cash,card,bank,koko,other,credit', 'payments.*.amount' => 'required|numeric|gt:0', 'payments.*.reference' => 'nullable|string|max:255',
         ]);
         $d['branch_id'] = $this->branchId($r);
         $d['cashier_session_id'] = CashierSession::where('user_id', auth_user_id())->where('branch_id', $d['branch_id'])->where('status', 'open')->value('id');
@@ -71,7 +73,7 @@ class SalesController extends Controller
 
     public function closeSession(Request $r, int $id)
     {
-        $d = $r->validate(['closing_cash' => 'required|numeric|min:0', 'notes' => 'nullable|string']);
+        $d = $r->validate(['closing_cash' => 'required|numeric|min:0|max:999999999999|decimal:0,2', 'notes' => 'nullable|string|max:5000']);
         $s = $this->scoped('cashier_sessions', $id);
         abort_if($s->user_id !== auth_user_id() && !auth_user()->hasPermission('sales.approve'), 403, 'Only the cashier or a manager can close this session.');
         return response()->json(['data' => $this->sales->closeSession($s, (float) $d['closing_cash'], $d['notes'] ?? null)]);
@@ -82,6 +84,20 @@ class SalesController extends Controller
         $d = $r->validate(['method' => 'required|in:cash,card,bank', 'amount' => 'required|numeric|gt:0', 'reference' => 'nullable|string|max:255']);
         $branch = auth_user()->branchScope() ?: $r->input('branch_id');
         return response()->json(['data' => $this->finance->collectFromCustomer(Customer::findOrFail($id), $d['method'], (float) $d['amount'], $branch, $d['reference'] ?? null)], 201);
+    }
+
+    public function closingPdf(int $id)
+    {
+        $session=$this->scoped('cashier_sessions',$id);
+        abort_if((int)$session->user_id !== (int)auth_user_id() && !auth_user()->hasPermission('sales.approve'),403,'Only the cashier or a manager can download this closing report.');
+        abort_if($session->status !== 'closed',422,'Close this till before downloading its closing report.');
+        $report=$session->closing_report;
+        abort_unless($report,422,'This session was closed before closing reports were enabled. New day closings will include a report.');
+        $pdf=new \Dompdf\Dompdf(['isRemoteEnabled'=>false,'isPhpEnabled'=>false,'defaultFont'=>'DejaVu Sans']);
+        $pdf->loadHtml(view('cashier-closing',compact('report'))->render());
+        $pdf->setPaper('A4'); $pdf->render();
+        $pdf->getCanvas()->page_text(485,815,'Page {PAGE_NUM} / {PAGE_COUNT}',null,8,[0.4,0.45,0.55]);
+        return response($pdf->output(),200,['Content-Type'=>'application/pdf','Content-Disposition'=>'attachment; filename="daily-closing-'.$report['date'].'-'.$id.'.pdf"','Cache-Control'=>'private, no-store']);
     }
 
     public function customerHistory(int $id)

@@ -25,52 +25,79 @@ class SalesService
 
     public function openSession(int $branchId, float $openingCash): CashierSession
     {
+        return DB::transaction(function () use ($branchId,$openingCash) {
+        \App\Models\User::whereKey(auth_user_id())->lockForUpdate()->firstOrFail();
         if (CashierSession::where('user_id', auth_user_id())->where('status', 'open')->exists()) {
             throw new BusinessRuleException('You already have an open cashier session.');
         }
-        return CashierSession::create(['branch_id' => $branchId, 'user_id' => auth_user_id(), 'opening_cash' => $openingCash, 'expected_cash' => $openingCash]);
+        return CashierSession::create(['branch_id' => $branchId, 'user_id' => auth_user_id(), 'opening_cash' => $openingCash, 'expected_cash' => $openingCash, 'opened_at'=>now()]);
+        });
     }
 
     public function closeSession(CashierSession $s, float $countedCash, ?string $notes): CashierSession
     {
-        if ($s->status !== 'open') throw new BusinessRuleException('Session is already closed.');
+        return DB::transaction(function () use ($s, $countedCash, $notes) {
+        \App\Models\User::whereKey($s->user_id)->lockForUpdate()->firstOrFail();
+        $s = CashierSession::lockForUpdate()->findOrFail($s->id);
+        if ($s->status !== 'open') {
+            if (abs((float)$s->closing_cash-$countedCash)<0.005) return $s;
+            throw new BusinessRuleException('Session is already closed. Download its existing report from Daily closing.');
+        }
         $s->update([
-            'closing_cash' => $countedCash, 'variance' => $countedCash - (float) $s->expected_cash,
+            'closing_cash' => round($countedCash,2), 'variance' => round($countedCash - (float) $s->expected_cash,2),
             'status' => 'closed', 'closed_at' => now(), 'notes' => $notes,
         ]);
+        $s->update(['closing_report'=>app(CashierReportService::class)->snapshot($s)]);
         return $s;
+        });
     }
 
     public function checkout(array $d): Invoice
     {
         if (empty($d['items'])) throw new BusinessRuleException('The cart is empty.');
         return DB::transaction(function () use ($d) {
+            \App\Models\User::whereKey(auth_user_id())->lockForUpdate()->firstOrFail();
+            if (!empty($d['cashier_session_id'])) {
+                $session=CashierSession::whereKey($d['cashier_session_id'])->lockForUpdate()->firstOrFail();
+                if ($session->status !== 'open') throw new BusinessRuleException('This till has been closed. Open a new session before selling.');
+            }
             $branchId = (int) $d['branch_id'];
             $wh = Warehouse::where('branch_id', $branchId)->where('type', 'showroom')->first()
                 ?? Warehouse::where('branch_id', $branchId)->first();
             if (!$wh) throw new BusinessRuleException('This branch has no stock location.');
 
             // 1. price lines from the database (never trust client prices)
-            $lines = []; $subtotal = 0.0; $cost = 0.0;
+            $lines = []; $subtotal = 0.0; $cost = 0.0; $lineDiscount=0.0;
             foreach ($d['items'] as $i) {
                 $p = Product::findOrFail($i['product_id']);
                 $qty = (float) $i['qty'];
                 if ($qty <= 0) throw new BusinessRuleException('Quantity must be positive.');
                 if ($p->type !== 'finished_good' || !$p->is_active) throw new BusinessRuleException("{$p->name} cannot be sold.");
                 $lt = round($qty * (float) $p->sale_price, 2);
-                $lines[] = ['p' => $p, 'qty' => $qty, 'price' => (float) $p->sale_price, 'cost' => (float) $p->cost_price, 'total' => $lt];
+                $type=$i['discount_type']??'fixed';$value=(float)($i['discount_value']??0);
+                $off=$type==='percentage'?round($lt*$value/100,2):round($value,2);
+                if($off>$lt || ($type==='percentage' && $value>100))throw new BusinessRuleException('Product discount cannot exceed the line amount.');
+                $lineDiscount+=$off;
+                $lines[] = ['discount_type'=>$type,'discount_value'=>$value,'discount_amount'=>$off,'net'=>round($lt-$off,2), 'p' => $p, 'qty' => $qty, 'price' => (float) $p->sale_price, 'cost' => (float) $p->cost_price, 'total' => $lt];
                 $subtotal += $lt; $cost += $qty * (float) $p->cost_price;
             }
 
             // 2. discount rule
+            $base=round($subtotal-$lineDiscount,2);
             $discount = 0.0;
+            $billType=$d['bill_discount_type']??'fixed';$billValue=(float)($d['bill_discount_value']??0);
+            if(!empty($d['discount_rule_id']) && $billValue>0)throw new BusinessRuleException('Choose either a discount rule or a manual bill discount.');
             if (!empty($d['discount_rule_id'])) {
                 $r = DiscountRule::findOrFail($d['discount_rule_id']);
                 $today = now()->toDateString();
                 $valid = $r->is_active && (!$r->starts_on || $r->starts_on <= $today) && (!$r->ends_on || $r->ends_on >= $today) && $subtotal >= (float) $r->min_total;
                 if (!$valid) throw new BusinessRuleException('This discount does not apply to the current cart.');
-                $discount = $r->type === 'percent' ? round($subtotal * (float) $r->value / 100, 2) : min((float) $r->value, $subtotal);
+                $discount = $r->type === 'percent' ? round($base * (float) $r->value / 100, 2) : min((float) $r->value, $base);
             }
+
+            else $discount=$billType==='percentage'?round($base*$billValue/100,2):round($billValue,2);
+            if($discount>$base || ($billType==='percentage' && $billValue>100))throw new BusinessRuleException('Bill discount cannot exceed the amount after product discounts.');
+            $billDiscount=$discount; $discount=round($discount+$lineDiscount,2);
 
             // 3. customer + loyalty redemption
             $customer = !empty($d['customer_id']) ? Customer::lockForUpdate()->findOrFail($d['customer_id']) : null;
@@ -94,11 +121,11 @@ class SalesService
                 if ($amt <= 0) throw new BusinessRuleException('Payment amounts must be positive.');
                 if ($pm['method'] === 'credit') $credit += $amt; else $paid += $amt;
             }
-            if (abs(($paid + $credit) - $total) > 0.01) {
+            if (abs(($paid + $credit) - $total) > 0.005) {
                 throw new BusinessRuleException(sprintf('Payments (%.2f) must equal the invoice total (%.2f).', $paid + $credit, $total));
             }
             if ($credit > 0) {
-                if (!$customer) throw new BusinessRuleException('Credit sales need a customer.');
+                if (!$customer || $customer->is_walk_in) throw new BusinessRuleException('Credit sales need a registered customer.');
                 if ((float) $customer->credit_balance + $credit > (float) $customer->credit_limit + 0.005) {
                     throw new BusinessRuleException('This sale exceeds the customer credit limit.');
                 }
@@ -109,13 +136,22 @@ class SalesService
                 'number' => DocNumber::next('INV'), 'branch_id' => $branchId, 'warehouse_id' => $wh->id,
                 'customer_id' => $customer?->id, 'salesperson_id' => $d['salesperson_id'] ?? null,
                 'cashier_session_id' => $d['cashier_session_id'] ?? null, 'campaign_id' => $d['campaign_id'] ?? null,
+                'pricing_version'=>2,'bill_discount_type'=>$billType,'bill_discount_value'=>$billValue,'bill_discount_amount'=>$billDiscount,
                 'subtotal' => $subtotal, 'discount' => $discount, 'loyalty_discount' => $loyaltyDiscount, 'total' => $total,
                 'paid' => $paid, 'credit_amount' => $credit, 'cost_total' => round($cost, 2),
                 'points_redeemed' => $pointsRedeemed, 'created_by' => auth_user_id(),
             ]);
+            // Allocate bill/loyalty discounts in cents so refunds and product reports
+            // use the actual net revenue; the last line absorbs the rounding remainder.
+            $remainingBase=(int)round($base*100);$remainingDiscount=(int)round(($billDiscount+$loyaltyDiscount)*100);
             foreach ($lines as $l) {
+                $cents=(int)round($l['net']*100);
+                $allocated=$remainingBase>0?(int)round($remainingDiscount*$cents/$remainingBase):0;
+                $allocated=min($cents,$allocated);$remainingBase-=$cents;$remainingDiscount-=$allocated;
                 $invoice->items()->create([
-                    'product_id' => $l['p']->id, 'qty' => $l['qty'], 'unit_price' => $l['price'], 'unit_cost' => $l['cost'], 'line_total' => $l['total'],
+                    'discount_type'=>$l['discount_type'],'discount_value'=>$l['discount_value'],'discount_amount'=>$l['discount_amount'],'allocated_discount_amount'=>$allocated/100,
+
+                    'product_id' => $l['p']->id, 'qty' => $l['qty'], 'allocated_qty' => $l['qty'], 'unit_price' => $l['price'], 'unit_cost' => $l['cost'], 'line_total' => round($l['net']-$allocated/100,2),
                 ]);
                 $this->inventory->move($l['p']->id, $wh->id, -$l['qty'], 'sale', ['ref_type' => 'invoice', 'ref_id' => $invoice->id, 'unit_cost' => $l['cost']]);
             }
@@ -129,7 +165,7 @@ class SalesService
                     'method' => $pm['method'], 'direction' => 'receipt', 'amount' => $pm['amount'],
                     'reference' => $pm['reference'] ?? null, 'user_id' => auth_user_id(),
                 ]);
-                if ($acc) $this->finance->post($acc->id, 'in', (float) $pm['amount'], 'sale', 'invoice', $invoice->id, $branchId, "Sale {$invoice->number}");
+                if ($acc) $this->finance->post($acc->id, 'in', (float) $pm['amount'], 'sale', 'invoice', $invoice->id, $branchId, "Sale {$invoice->number}", $pay->id);
                 if ($pm['method'] === 'cash' && !empty($d['cashier_session_id'])) {
                     CashierSession::where('id', $d['cashier_session_id'])->increment('expected_cash', (float) $pm['amount']);
                 }
@@ -141,14 +177,6 @@ class SalesService
                 if ($pointsRedeemed > 0) {
                     $customer->loyalty_points -= $pointsRedeemed;
                     LoyaltyLedger::create(['customer_id' => $customer->id, 'invoice_id' => $invoice->id, 'points' => -$pointsRedeemed, 'type' => 'redeem']);
-                }
-                $perCurrency = max((float) Settings::get('loyalty_currency_per_point', 100), 0.01);   // spend this much to earn 1 point
-                $mult = (float) (LoyaltyTier::where('name', $customer->tier)->value('earn_multiplier') ?? 1);
-                $earn = (int) floor(($total / $perCurrency) * $mult);
-                if ($earn > 0) {
-                    $customer->loyalty_points += $earn;
-                    LoyaltyLedger::create(['customer_id' => $customer->id, 'invoice_id' => $invoice->id, 'points' => $earn, 'type' => 'earn']);
-                    $invoice->points_earned = $earn;
                 }
                 $customer->tier = LoyaltyTier::where('min_points', '<=', $customer->loyalty_points)->orderByDesc('min_points')->value('name') ?? $customer->tier;
                 $customer->save();
@@ -166,7 +194,8 @@ class SalesService
                 }
             }
             $invoice->save();
-            return $invoice->load('items.product', 'customer', 'payments');
+            app(LoyaltyService::class)->award($invoice);
+            return $invoice->fresh(['items.product', 'customer', 'payments']);
         });
     }
 
@@ -175,7 +204,12 @@ class SalesService
     {
         if (!$lines) throw new BusinessRuleException('Select items to return.');
         return DB::transaction(function () use ($invoice, $lines, $method, $reason) {
+            \App\Models\User::whereKey(auth_user_id())->lockForUpdate()->firstOrFail();
+            $session = CashierSession::where('user_id',auth_user_id())->where('branch_id',$invoice->branch_id)->where('status','open')->lockForUpdate()->first();
             $invoice = Invoice::lockForUpdate()->with('items')->findOrFail($invoice->id);
+            if ($invoice->is_order && ((float) $invoice->balance_due > 0 || $invoice->manufacturingRequests()->where('status', '!=', 'completed')->exists())) {
+                throw new BusinessRuleException('Complete factory fulfilment and settle this invoice before using the return workflow.');
+            }
             $ratio = (float) $invoice->subtotal > 0 ? (float) $invoice->total / (float) $invoice->subtotal : 1;
             $ret = SalesReturn::create([
                 'number' => DocNumber::next('RET'), 'invoice_id' => $invoice->id, 'refund_amount' => 0,
@@ -188,7 +222,7 @@ class SalesService
                 if (!$item || $qty <= 0 || $qty > (float) $item->qty - (float) $item->returned_qty + 0.0001) {
                     throw new BusinessRuleException('Return quantity exceeds what was sold.');
                 }
-                $amount = round($qty * (float) $item->unit_price * $ratio, 2);
+                $amount = round($qty * ($invoice->pricing_version>=2 ? (float)$item->line_total/(float)$item->qty : (float)$item->unit_price*$ratio),2);
                 $ret->items()->create(['product_id' => $item->product_id, 'qty' => $qty, 'amount' => $amount]);
                 $item->returned_qty = (float) $item->returned_qty + $qty; $item->save();
                 $this->inventory->move($item->product_id, $invoice->warehouse_id, $qty, 'sale_return', ['ref_type' => 'sales_return', 'ref_id' => $ret->id, 'unit_cost' => (float) $item->unit_cost]);
@@ -204,15 +238,19 @@ class SalesService
                     $c->credit_balance = max(0, (float) $c->credit_balance - $refund); $c->save();
                 } else {
                     $acc = $this->finance->accountFor($invoice->branch_id, $method);
-                    Payment::create(['invoice_id' => $invoice->id, 'customer_id' => $invoice->customer_id, 'branch_id' => $invoice->branch_id, 'account_id' => $acc->id, 'method' => $method, 'direction' => 'refund', 'amount' => $refund, 'user_id' => auth_user_id()]);
-                    $this->finance->post($acc->id, 'out', $refund, 'refund', 'sales_return', $ret->id, $invoice->branch_id, "Return {$ret->number}");
+                    $refundPayment = Payment::create(['invoice_id' => $invoice->id, 'customer_id' => $invoice->customer_id, 'branch_id' => $invoice->branch_id, 'cashier_session_id'=>$session?->id, 'account_id' => $acc->id, 'method' => $method, 'direction' => 'refund', 'amount' => $refund, 'user_id' => auth_user_id()]);
+                    if ($session && $method==='cash') $session->decrement('expected_cash',$refund);
+                    $this->finance->post($acc->id, 'out', $refund, 'refund', 'sales_return', $ret->id, $invoice->branch_id, "Return {$ret->number}", $refundPayment->id);
                 }
             }
 
             // reverse proportional loyalty + commission
             $share = (float) $invoice->total > 0 ? min(1, $refund / (float) $invoice->total) : 0;
             if ($invoice->customer_id && $invoice->points_earned > 0) {
-                $pts = (int) floor($invoice->points_earned * $share);
+                $returned=(float)SalesReturn::where('invoice_id',$invoice->id)->sum('refund_amount');
+                $already=abs((int)LoyaltyLedger::where('invoice_id',$invoice->id)->where('type','reversal')->sum('points'));
+                $target=(int)floor($invoice->points_earned*min(1,$invoice->total>0?$returned/$invoice->total:0)+0.000001);
+                $pts=max(0,$target-$already);
                 if ($pts > 0) {
                     $c = Customer::lockForUpdate()->find($invoice->customer_id);
                     $c->loyalty_points = max(0, $c->loyalty_points - $pts); $c->save();

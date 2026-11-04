@@ -64,7 +64,7 @@ class DatabaseSeeder extends Seeder
         $king = Product::create(['sku' => 'FG-BS-K', 'name' => 'Bed Sheet Set', 'variant' => 'King', 'type' => 'finished_good', 'category_id' => $cBed->id, 'unit_id' => $pcs->id, 'sale_price' => 59.90, 'reorder_level' => 10]);
 
         foreach ([['code' => 'SUP-001', 'name' => 'Lakeside Textiles'], ['code' => 'SUP-002', 'name' => 'PackWell Supplies']] as $s) Supplier::create($s + ['phone' => '000-000-0000']);
-        foreach ([['CUS-001', 'Walk-in Customer', 0], ['CUS-002', 'Hotel Sunrise', 5000], ['CUS-003', 'Amelia Brooks', 500]] as [$c, $n, $l]) Customer::create(['code' => $c, 'name' => $n, 'credit_limit' => $l, 'tier' => 'Bronze']);
+        foreach ([['CUS-001', 'Walk-in Customer', 0], ['CUS-002', 'Hotel Sunrise', 5000], ['CUS-003', 'Amelia Brooks', 500]] as [$c, $n, $l]) Customer::create(['code' => $c, 'name' => $n, 'credit_limit' => $l, 'tier' => 'Bronze', 'is_walk_in'=>$c==='CUS-001']);
         LoyaltyTier::create(['name' => 'Bronze', 'min_points' => 0, 'earn_multiplier' => 1]);
         LoyaltyTier::create(['name' => 'Silver', 'min_points' => 500, 'earn_multiplier' => 1.25]);
         LoyaltyTier::create(['name' => 'Gold', 'min_points' => 2000, 'earn_multiplier' => 1.5]);

@@ -2,7 +2,7 @@
 use App\Http\Controllers as C;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/ping', fn () => ['app' => config('app.name'), 'status' => 'ok']);
+Route::get('/ping', fn () => response()->json(['app'=>config('app.name'),'status'=>'ok','server_time'=>now()->toIso8601String()])->header('Cache-Control','no-store'));
 Route::post('/auth/login', [C\AuthController::class, 'login'])->middleware('throttle:10,1');
 
 Route::middleware(['auth.token', 'workspace', 'throttle:240,1'])->group(function () {
@@ -44,12 +44,25 @@ Route::middleware(['auth.token', 'workspace', 'throttle:240,1'])->group(function
     Route::post('/production-orders', [C\ManufacturingController::class, 'storeOrder'])->middleware('perm:manufacturing.create');
     Route::post('/production-orders/{id}/{action}', [C\ManufacturingController::class, 'transition'])->whereIn('action', ['release', 'start', 'complete', 'cancel'])->middleware('perm:manufacturing.edit');
 
+    // Customer orders, quotations, PDF documents and factory demand
+    Route::get('/sales/customers/{id}/credit', [C\SalesDocumentController::class, 'customerCredit'])->middleware('perm:sales.create');
+    Route::post('/sales/customers', [C\SalesDocumentController::class, 'customer'])->middleware(['perm:sales.create','idempotent']);
+    Route::get('/sales/invoices/{id}/factory-pdf', [C\SalesDocumentController::class, 'factoryPdf']);
+    Route::get('/sales/invoices/{id}/print', [C\SalesDocumentController::class, 'printPack'])->middleware('perm:sales.view');
+    Route::get('/sales/catalog', [C\SalesDocumentController::class, 'catalog'])->middleware('perm:sales.create');
+    Route::post('/sales/{type}', [C\SalesDocumentController::class, 'create'])->whereIn('type', ['invoices', 'quotations'])->middleware(['perm:sales.create', 'idempotent']);
+    Route::get('/sales/{type}/{id}/pdf', [C\SalesDocumentController::class, 'pdf'])->whereIn('type', ['invoices', 'quotations'])->middleware('perm:sales.view');
+    Route::post('/invoices/{id}/payments', [C\SalesDocumentController::class, 'payment'])->middleware(['perm:sales.create', 'idempotent']);
+    Route::get('/manufacturing-requests', [C\SalesDocumentController::class, 'requests'])->middleware('perm:manufacturing.view');
+    Route::post('/manufacturing-requests/{id}/approve', [C\SalesDocumentController::class, 'approve'])->middleware(['perm:manufacturing.edit', 'idempotent']);
+
     // POS & sales
     Route::get('/pos/catalog', [C\SalesController::class, 'catalog'])->middleware('perm:sales.view');
     Route::post('/pos/checkout', [C\SalesController::class, 'checkout'])->middleware(['perm:sales.create', 'idempotent']);
     Route::post('/invoices/{id}/return', [C\SalesController::class, 'returnItems'])->middleware('perm:sales.cancel');
     Route::post('/cashier-sessions/open', [C\SalesController::class, 'openSession'])->middleware('perm:sales.create');
     Route::post('/cashier-sessions/{id}/close', [C\SalesController::class, 'closeSession'])->middleware('perm:sales.create');
+    Route::get('/cashier-sessions/{id}/report.pdf', [C\SalesController::class, 'closingPdf'])->middleware('perm:sales.view');
     Route::post('/customers/{id}/payments', [C\SalesController::class, 'customerPayment'])->middleware('perm:crm.edit');
     Route::get('/customers/{id}/history', [C\SalesController::class, 'customerHistory'])->middleware('perm:crm.view');
 
@@ -63,6 +76,7 @@ Route::middleware(['auth.token', 'workspace', 'throttle:240,1'])->group(function
     Route::post('/payroll-periods/{id}/generate', [C\HrController::class, 'generate'])->middleware('perm:payroll.edit');
     Route::post('/payroll-periods/{id}/advance', [C\HrController::class, 'advance'])->middleware('perm:payroll.approve');
     Route::post('/delivery-orders', [C\DeliveryController::class, 'store'])->middleware('perm:delivery.create');
+    Route::put('/delivery-orders/{id}', [C\DeliveryController::class, 'update'])->middleware('perm:delivery.edit');
     Route::post('/delivery-orders/{id}/status', [C\DeliveryController::class, 'status'])->middleware('perm:delivery.edit');
 
     // Generic master data & read-only listings (permission checked inside)
